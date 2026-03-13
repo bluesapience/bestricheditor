@@ -1,0 +1,48 @@
+/* ───────────────────────────────────────────────
+   CSS Variables — override these for theming
+─────────────────────────────────────────────── */
+:root {
+  --bre-color-primary:     #111827;
+  --bre-color-bg:          #ffffff;
+  --bre-color-surface:     #f9fafb;
+  --bre-color-border:      #e5e7eb;
+  --bre-color-text:        #111827;
+  --bre-color-text-muted:  #6b7280;
+  --bre-color-accent:      #3b82f6;
+  --bre-color-placeholder: #9ca3af;
+
+  --bre-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --bre-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
+  --bre-radius:           6px;
+  --bre-editor-max-width: 720px;
+  --bre-editor-padding:   40px 24px;
+}
+
+/* ───────────────────────────────────────────────
+   Editor root
+─────────────────────────────────────────────── */
+.bre-editor {
+  font-family: var(--bre-font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--bre-color-text);
+  background: var(--bre-color-bg);
+  max-width: var(--bre-editor-max-width);
+  margin: 0 auto;
+  padding: var(--bre-editor-padding);
+  min-height: 300px;
+  position: relative;
+  outline: none;
+  box-sizing: border-box;
+}
+
+/* ───────────────────────────────────────────────
+   Placeholder (Stage 0 stub)
+─────────────────────────────────────────────── */
+.bre-placeholder {
+  color: var(--bre-color-placeholder);
+  font-size: 16px;
+  pointer-events: none;
+  user-select: none;
+}
