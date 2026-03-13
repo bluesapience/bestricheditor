@@ -91,6 +91,21 @@ const BRE_DOC = {
       },
     },
     {
+      id: 'b15b',
+      type: 'heading',
+      data: { level: 2, text: 'Formula (KaTeX)' },
+    },
+    {
+      id: 'b15c',
+      type: 'formula',
+      data: { latex: 'E = mc^2', displayMode: true },
+    },
+    {
+      id: 'b15d',
+      type: 'formula',
+      data: { latex: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}', displayMode: true },
+    },
+    {
       id: 'b16',
       type: 'heading',
       data: { level: 2, text: 'Columns' },
@@ -187,6 +202,21 @@ const BREW_DOC = {
         language: 'javascript',
         code: 'const editor = createEditor(container, { mode: "BREW" });\neditor.setJSON(doc);\nconsole.log(editor.getHTML());',
       },
+    },
+    {
+      id: 'bw12',
+      type: 'heading',
+      data: { level: 2, text: 'Formula (KaTeX)' },
+    },
+    {
+      id: 'bw13',
+      type: 'formula',
+      data: { latex: 'E = mc^2', displayMode: true },
+    },
+    {
+      id: 'bw14',
+      type: 'formula',
+      data: { latex: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}', displayMode: true },
     },
   ],
 };

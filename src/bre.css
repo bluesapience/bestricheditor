@@ -635,3 +635,36 @@ code[data-bre-placeholder]:empty::before {
   color: var(--bre-color-accent);
   text-decoration: underline;
 }
+
+/* ─── Formula block ──────────────────────────────────────────────────────── */
+
+.bre-formula {
+  padding: 12px 16px;
+  background: var(--bre-color-surface);
+  border: 1px solid var(--bre-color-border);
+  border-radius: var(--bre-radius);
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  transition: border-color 0.15s ease;
+}
+
+.bre-formula:hover,
+.bre-formula:focus {
+  border-color: var(--bre-color-accent);
+}
+
+.bre-formula-placeholder {
+  color: var(--bre-color-placeholder);
+  font-style: italic;
+  font-size: 0.9em;
+}
+
+.bre-formula-error {
+  color: #dc2626;
+  font-family: var(--bre-font-mono);
+  font-size: 0.85em;
+}

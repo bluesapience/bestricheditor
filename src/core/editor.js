@@ -14,7 +14,10 @@ import {
   isCursorAtStart,
   isCursorAtEnd,
 } from '../utils/dom.js';
-import { sanitizeHTML } from '../utils/sanitize.js';
+import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
+import { transforms } from './transforms.js';
+import { htmlToBlocks } from '../utils/htmlToBlocks.js';
+import '../blocks/formula.js';
 import { createState } from './state.js';
 import { createCommands } from './commands.js';
 import { createRenderer } from './renderer.js';
@@ -104,6 +107,13 @@ const SLASH_ITEMS = [
     description: 'Two-column layout',
     defaultData: null, // handled specially
   },
+  {
+    type: 'formula',
+    label: 'Formula',
+    icon: '∑',
+    description: 'Insert a KaTeX math formula',
+    defaultData: null, // handled specially
+  },
 ];
 
 function makeBlock(type, data) {
@@ -155,6 +165,35 @@ export function createEditor(container, options = {}) {
   // Drag handles
   initDragHandles(root, state, renderer);
 
+  // Register paste pipeline steps (idempotent — only register once globally)
+  if (!transforms.has('paste')) {
+    // Step 1: normalise — strip MS Word/Google Docs cruft
+    transforms.register('paste', (payload) => {
+      let { html } = payload;
+      // Remove MS Word conditional comments and namespace tags
+      html = html.replace(/<!--\[if[\s\S]*?\[endif\]-->/gi, '');
+      html = html.replace(/<\/?o:[^>]*>/gi, '');
+      html = html.replace(/<\/?w:[^>]*>/gi, '');
+      html = html.replace(/<\/?m:[^>]*>/gi, '');
+      // Remove style/script/meta tags
+      html = html.replace(/<style[\s\S]*?<\/style>/gi, '');
+      html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+      return { ...payload, html };
+    }, { order: 10 });
+
+    // Step 2: parse HTML → blocks
+    transforms.register('paste', (payload) => {
+      const blocks = htmlToBlocks(payload.html);
+      return { ...payload, blocks };
+    }, { order: 20 });
+
+    // Step 3: optimise — merge adjacent same-type text blocks if trivially short
+    transforms.register('paste', (payload) => {
+      // No-op for now — placeholder for future optimisation
+      return payload;
+    }, { order: 30 });
+  }
+
   // Debounced onChange
   const notifyChange = opts.onChange
     ? debounce(() => opts.onChange(state.getDoc()), 300)
@@ -169,6 +208,7 @@ export function createEditor(container, options = {}) {
   root.addEventListener('input', handleInput);
   root.addEventListener('keydown', handleKeydown);
   root.addEventListener('paste', handlePaste);
+  root.addEventListener('click', handleClick);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -180,6 +220,25 @@ export function createEditor(container, options = {}) {
     const blockId = blockEl.getAttribute('data-bre-block-id');
     const fieldName = fieldEl.getAttribute('data-bre-field');
     return { fieldEl, blockEl, blockId, fieldName };
+  }
+
+  // ── Click Handler ──────────────────────────────────────────────────────────
+
+  function handleClick(e) {
+    const formulaEl = e.target.closest('.bre-formula');
+    if (!formulaEl) return;
+    const blockEl = closestBlock(formulaEl);
+    if (!blockEl) return;
+    const blockId = blockEl.getAttribute('data-bre-block-id');
+    const block = state.getBlock(blockId);
+    if (!block || block.type !== 'formula') return;
+
+    const currentLatex = block.data.latex || '';
+    const latex = prompt('Edit LaTeX formula:', currentLatex);
+    if (latex === null) return; // cancelled
+    state.updateBlockData(blockId, { latex, displayMode: block.data.displayMode ?? true });
+    renderer.updateBlock(state.getBlock(blockId));
+    if (notifyChange) notifyChange();
   }
 
   // ── Input Handler ──────────────────────────────────────────────────────────
@@ -275,6 +334,13 @@ export function createEditor(container, options = {}) {
         slashFieldEl = null;
         return;
       }
+    }
+
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      const info = getFieldInfo(e.target);
+      if (info) handleLinkInsert(info.fieldEl);
+      return;
     }
 
     const info = getFieldInfo(e.target);
@@ -521,14 +587,81 @@ export function createEditor(container, options = {}) {
     focusBlock(blocks[blockIndex + 1].id, 0);
   }
 
+  // ── Link Insert (Cmd+K) ────────────────────────────────────────────────────
+
+  function handleLinkInsert(fieldEl) {
+    const url = prompt('Enter URL:');
+    if (!url) return;
+    const safe = sanitizeURL(url);
+    if (!safe) { alert('Invalid or unsafe URL.'); return; }
+    fieldEl.focus();
+    document.execCommand('createLink', false, safe);
+    // Add rel/target to the created link
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      let node = sel.getRangeAt(0).commonAncestorContainer;
+      if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+      const a = node.closest?.('a');
+      if (a) {
+        a.setAttribute('rel', 'noopener noreferrer');
+        a.setAttribute('target', '_blank');
+      }
+    }
+  }
+
   // ── Paste Handler ──────────────────────────────────────────────────────────
 
   function handlePaste(e) {
     const info = getFieldInfo(e.target);
     if (!info) return;
     e.preventDefault();
+
+    const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
-    document.execCommand('insertText', false, text);
+
+    // If HTML available, use the transform pipeline (top-level blocks only)
+    if (html && html.trim()) {
+      const { blockId } = info;
+      const { block, context } = state.findBlockAnywhere(blockId);
+
+      if (!block || context !== null) {
+        // For column sub-blocks, fall back to plain text
+        document.execCommand('insertText', false, text);
+        return;
+      }
+
+      const result = transforms.run('paste', { html, text }, {});
+      const pastedBlocks = result.blocks;
+
+      if (!pastedBlocks || pastedBlocks.length === 0) {
+        document.execCommand('insertText', false, text);
+        return;
+      }
+
+      // Insert blocks after current block
+      let afterId = block.id;
+      for (const pb of pastedBlocks) {
+        state.addBlock(pb, afterId);
+        renderer.insertBlock(pb, afterId);
+        afterId = pb.id;
+      }
+
+      // Remove current block if it was empty
+      if (!block.data.text || block.data.text.trim() === '') {
+        state.removeBlock(block.id);
+        renderer.removeBlock(block.id);
+      }
+
+      // Focus first pasted block
+      if (pastedBlocks.length > 0) {
+        focusBlock(pastedBlocks[0].id, 0);
+      }
+
+      if (notifyChange) notifyChange();
+    } else {
+      // Plain text — insert at cursor
+      document.execCommand('insertText', false, text);
+    }
   }
 
   // ── Slash Select ───────────────────────────────────────────────────────────
@@ -548,6 +681,10 @@ export function createEditor(container, options = {}) {
           [makeBlock('paragraph', { text: '' })],
         ],
       };
+    } else if (item.type === 'formula') {
+      const latex = prompt('Enter LaTeX formula (e.g. E = mc^2):');
+      if (!latex) return; // cancelled
+      newData = { latex, displayMode: true };
     } else {
       newData = { ...(item.defaultData || {}) };
     }
@@ -664,9 +801,12 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('input', handleInput);
     root.removeEventListener('keydown', handleKeydown);
     root.removeEventListener('paste', handlePaste);
+    root.removeEventListener('click', handleClick);
     slashMenu.destroy();
     root.remove();
   }
 
   return { getJSON, setJSON, getHTML, destroy };
 }
+
+export { transforms };
