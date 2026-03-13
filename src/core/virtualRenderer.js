@@ -5,6 +5,18 @@
  * visible ± OVERSCAN blocks. Spacer divs above/below maintain scroll height.
  * Per-block heights are cached after measurement.
  *
+ * Performance design:
+ *  - containerOffset is cached and only refreshed on resize, avoiding
+ *    getBoundingClientRect() on every scroll frame.
+ *  - scrollParent is cached once at attach time; calcVisibleWindow uses it
+ *    directly instead of walking the DOM every frame.
+ *  - Both top- and bottom-entering blocks are batched into DocumentFragments
+ *    to minimise layout thrashing.
+ *  - renderAll uses a single DocumentFragment for the initial paint.
+ *  - Heights are measured after the first paint so spacers start accurate.
+ *  - State subscriber only calls updateSpacers when block count changes
+ *    (drag-reorder / insert / delete), not on every keystroke.
+ *
  * Usage: createVirtualRenderer(container, state)
  */
 import { blockRegistry } from './blockRegistry.js';
@@ -55,6 +67,11 @@ export function createVirtualRenderer(container, state) {
   let visibleEnd = -1;
   let rafPending = false;
 
+  // Cached layout values — refreshed once at attach time and on resize.
+  // Avoids getBoundingClientRect() + findScrollParent() on every scroll frame.
+  let scrollParent = null;
+  let cachedContainerOffset = 0;
+
   // Spacer elements maintain scroll height for off-screen blocks
   const topSpacer = document.createElement('div');
   topSpacer.className = 'bre-virt-spacer-top';
@@ -73,6 +90,14 @@ export function createVirtualRenderer(container, state) {
     return window;
   }
 
+  function refreshContainerOffset() {
+    if (!scrollParent) return;
+    const rect = container.getBoundingClientRect();
+    cachedContainerOffset = scrollParent === window
+      ? rect.top + window.scrollY
+      : rect.top + scrollParent.scrollTop;
+  }
+
   function estimateHeight(id) {
     return heightCache.get(id) ?? DEFAULT_BLOCK_HEIGHT;
   }
@@ -83,6 +108,14 @@ export function createVirtualRenderer(container, state) {
       const h = el.getBoundingClientRect().height;
       if (h > 0) heightCache.set(id, h);
     }
+  }
+
+  /** Measure all currently-visible blocks and update spacers. */
+  function measureVisibleAndUpdateSpacers() {
+    for (let i = visibleStart; i <= visibleEnd; i++) {
+      measureBlock(blocks[i].id);
+    }
+    updateSpacers();
   }
 
   function calcTopHeight() {
@@ -125,9 +158,9 @@ export function createVirtualRenderer(container, state) {
   }
 
   // ── Window calculation ───────────────────────────────────────────────────
+  // Uses cached scrollParent and cachedContainerOffset — no DOM reads.
 
   function calcVisibleWindow() {
-    const scrollParent = findScrollParent(container);
     let scrollTop, viewHeight;
 
     if (scrollParent === window) {
@@ -138,13 +171,7 @@ export function createVirtualRenderer(container, state) {
       viewHeight = scrollParent.clientHeight;
     }
 
-    // Get container's offset from scroll origin
-    const containerRect = container.getBoundingClientRect();
-    const containerOffset = scrollParent === window
-      ? containerRect.top + window.scrollY
-      : containerRect.top + scrollParent.scrollTop;
-
-    const viewTop = scrollTop - containerOffset;
+    const viewTop = scrollTop - cachedContainerOffset;
     const viewBottom = viewTop + viewHeight;
 
     // Walk heights to find first/last visible block
@@ -199,7 +226,7 @@ export function createVirtualRenderer(container, state) {
       if (el) { el.parentNode && el.parentNode.removeChild(el); blockMap.delete(blocks[i].id); }
     }
 
-    // Add new blocks entering from the top — collect in a fragment to preserve order
+    // Add new blocks entering from the top — batch in a fragment to preserve order
     if (newStart < visibleStart) {
       const frag = document.createDocumentFragment();
       for (let i = newStart; i < visibleStart && i <= newEnd; i++) {
@@ -208,16 +235,19 @@ export function createVirtualRenderer(container, state) {
         frag.appendChild(el);
         if (blocks[i].type === 'columns') registerSubBlocks(blocks[i]);
       }
-      // Insert the whole fragment before the first currently-visible block
       container.insertBefore(frag, firstCurrentEl || bottomSpacer);
     }
 
-    // Add new blocks entering from the bottom
-    for (let i = Math.max(visibleEnd + 1, newStart); i <= newEnd; i++) {
-      const el = renderBlockEl(blocks[i]);
-      blockMap.set(blocks[i].id, el);
-      container.insertBefore(el, bottomSpacer);
-      if (blocks[i].type === 'columns') registerSubBlocks(blocks[i]);
+    // Add new blocks entering from the bottom — batch in a fragment
+    if (newEnd > visibleEnd) {
+      const frag = document.createDocumentFragment();
+      for (let i = Math.max(visibleEnd + 1, newStart); i <= newEnd; i++) {
+        const el = renderBlockEl(blocks[i]);
+        blockMap.set(blocks[i].id, el);
+        frag.appendChild(el);
+        if (blocks[i].type === 'columns') registerSubBlocks(blocks[i]);
+      }
+      container.insertBefore(frag, bottomSpacer);
     }
 
     visibleStart = newStart;
@@ -225,7 +255,7 @@ export function createVirtualRenderer(container, state) {
     updateSpacers();
   }
 
-  // ── Scroll handler ───────────────────────────────────────────────────────
+  // ── Scroll + Resize handlers ──────────────────────────────────────────────
 
   function onScroll() {
     if (rafPending) return;
@@ -238,11 +268,16 @@ export function createVirtualRenderer(container, state) {
     });
   }
 
-  let scrollParent = null;
+  function onWindowResize() {
+    refreshContainerOffset();
+    if (blocks.length > 0) onScroll();
+  }
 
   function attachScroll() {
     scrollParent = findScrollParent(container);
+    refreshContainerOffset();
     scrollParent.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onWindowResize, { passive: true });
   }
 
   function detachScroll() {
@@ -250,12 +285,18 @@ export function createVirtualRenderer(container, state) {
       scrollParent.removeEventListener('scroll', onScroll);
       scrollParent = null;
     }
+    window.removeEventListener('resize', onWindowResize);
   }
 
-  // Keep internal blocks array in sync with state (handles drag reorder, etc.)
+  // Keep internal blocks array in sync (drag reorder, insert, delete).
+  // Only call updateSpacers when block count changes — not on every keystroke.
+  let prevBlockCount = 0;
   const unsubscribe = state.subscribe((doc) => {
     blocks = doc.blocks;
-    updateSpacers();
+    if (blocks.length !== prevBlockCount) {
+      prevBlockCount = blocks.length;
+      updateSpacers();
+    }
   });
 
   // ── Public API (matches createRenderer interface) ─────────────────────────
@@ -263,6 +304,7 @@ export function createVirtualRenderer(container, state) {
   function renderAll(newBlocks) {
     detachScroll();
     blocks = newBlocks;
+    prevBlockCount = blocks.length;
     blockMap.clear();
     heightCache.clear();
     container.innerHTML = '';
@@ -281,17 +323,25 @@ export function createVirtualRenderer(container, state) {
     visibleStart = 0;
     visibleEnd = Math.min(blocks.length - 1, OVERSCAN * 2);
 
+    // Batch all initial elements into a single fragment — one DOM write
+    const frag = document.createDocumentFragment();
     for (let i = visibleStart; i <= visibleEnd; i++) {
       const el = renderBlockEl(blocks[i]);
       blockMap.set(blocks[i].id, el);
-      container.insertBefore(el, bottomSpacer);
+      frag.appendChild(el);
       if (blocks[i].type === 'columns') registerSubBlocks(blocks[i]);
     }
+    container.insertBefore(frag, bottomSpacer);
 
     topSpacer.style.height = '0px';
     bottomSpacer.style.height = calcBottomHeight() + 'px';
 
     attachScroll();
+
+    // Measure actual block heights after first paint so spacers are accurate.
+    requestAnimationFrame(() => {
+      if (blocks.length > 0) measureVisibleAndUpdateSpacers();
+    });
   }
 
   function updateBlock(block) {

@@ -386,7 +386,7 @@ code[data-bre-placeholder]:empty::before {
 }
 
 .bre-table-btn:hover {
-  background: var(--bre-color-hover);
+  background: var(--bre-color-border);
 }
 
 /* ───────────────────────────────────────────────
@@ -428,7 +428,8 @@ code[data-bre-placeholder]:empty::before {
 .bre-image-placeholder:hover,
 .bre-audio-placeholder:hover,
 .bre-video-placeholder:hover {
-  background: var(--bre-color-hover);
+  background: var(--bre-color-surface);
+  border-color: var(--bre-color-accent);
 }
 
 /* Audio */
@@ -453,6 +454,13 @@ code[data-bre-placeholder]:empty::before {
 }
 
 /* Shared caption */
+.bre-media-caption[data-bre-placeholder]:empty::before {
+  content: attr(data-bre-placeholder);
+  color: var(--bre-color-placeholder);
+  pointer-events: none;
+  user-select: none;
+}
+
 .bre-media-caption {
   display: block;
   margin-top: 4px;
