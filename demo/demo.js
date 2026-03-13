@@ -207,6 +207,63 @@ const BRE_DOC = {
         ],
       },
     },
+    {
+      id: 'b22',
+      type: 'heading',
+      data: { level: 2, text: 'Table' },
+    },
+    {
+      id: 'b23',
+      type: 'table',
+      data: {
+        rows: [
+          ['Name', 'Role', 'Status'],
+          ['Alice', 'Engineer', 'Active'],
+          ['Bob', 'Designer', 'Active'],
+          ['Carol', 'Manager', 'On leave'],
+        ],
+      },
+    },
+    {
+      id: 'b24',
+      type: 'heading',
+      data: { level: 2, text: 'Image' },
+    },
+    {
+      id: 'b25',
+      type: 'image',
+      data: {
+        src: 'https://images.unsplash.com/photo-1506748686214-e9df14d4d9d0?w=800',
+        alt: 'Calm lake at sunrise',
+        caption: 'A peaceful lake at sunrise — click the image to change the URL.',
+      },
+    },
+    {
+      id: 'b26',
+      type: 'heading',
+      data: { level: 2, text: 'Audio' },
+    },
+    {
+      id: 'b27',
+      type: 'audio',
+      data: {
+        src: '',
+        caption: 'Click the placeholder above to set an audio URL.',
+      },
+    },
+    {
+      id: 'b28',
+      type: 'heading',
+      data: { level: 2, text: 'Video' },
+    },
+    {
+      id: 'b29',
+      type: 'video',
+      data: {
+        src: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        caption: 'YouTube embed via the allowlist. Click the player to change URL.',
+      },
+    },
   ],
 };
 

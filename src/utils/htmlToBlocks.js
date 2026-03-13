@@ -4,6 +4,7 @@
  */
 import DOMPurify from 'dompurify';
 import { generateId } from './id.js';
+import { sanitizeURL } from './sanitize.js';
 
 /**
  * Convert an HTML string to an array of BRE blocks.
@@ -112,6 +113,50 @@ function processNode(node, blocks) {
 
     case 'HR': {
       blocks.push(makeBlock('divider', {}));
+      break;
+    }
+
+    case 'TABLE': {
+      const rows = [];
+      for (const tr of node.querySelectorAll('tr')) {
+        const row = [];
+        for (const cell of tr.querySelectorAll('th, td')) {
+          row.push(cell.textContent.trim());
+        }
+        if (row.length > 0) rows.push(row);
+      }
+      if (rows.length > 0) blocks.push(makeBlock('table', { rows }));
+      break;
+    }
+
+    case 'IMG': {
+      const src = sanitizeURL(node.getAttribute('src') || '');
+      if (src) {
+        blocks.push(makeBlock('image', {
+          src,
+          alt: node.getAttribute('alt') || '',
+          caption: '',
+        }));
+      }
+      break;
+    }
+
+    case 'FIGURE': {
+      const img = node.querySelector('img');
+      const audio = node.querySelector('audio');
+      const video = node.querySelector('video');
+      const captionEl = node.querySelector('figcaption');
+      const caption = captionEl ? captionEl.textContent.trim() : '';
+      if (img) {
+        const src = sanitizeURL(img.getAttribute('src') || '');
+        if (src) blocks.push(makeBlock('image', { src, alt: img.getAttribute('alt') || '', caption }));
+      } else if (audio) {
+        const src = sanitizeURL(audio.getAttribute('src') || '');
+        if (src) blocks.push(makeBlock('audio', { src, caption }));
+      } else if (video) {
+        const src = sanitizeURL(video.getAttribute('src') || '');
+        if (src) blocks.push(makeBlock('video', { src, caption }));
+      }
       break;
     }
 

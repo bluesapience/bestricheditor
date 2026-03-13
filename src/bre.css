@@ -325,6 +325,159 @@ code[data-bre-placeholder]:empty::before {
 }
 
 /* ───────────────────────────────────────────────
+   Table
+─────────────────────────────────────────────── */
+.bre-table-wrapper {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.bre-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.bre-table th,
+.bre-table td {
+  border: 1px solid var(--bre-color-border);
+  padding: 6px 10px;
+  min-width: 80px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.bre-table th {
+  background: var(--bre-color-surface);
+  font-weight: 600;
+}
+
+.bre-table-cell[contenteditable] {
+  outline: none;
+  cursor: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bre-table-cell[data-bre-placeholder]:empty::before {
+  content: attr(data-bre-placeholder);
+  color: var(--bre-color-placeholder);
+  pointer-events: none;
+  user-select: none;
+}
+
+.bre-table-controls {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.bre-table-btn {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  border: 1px solid var(--bre-color-border);
+  border-radius: var(--bre-radius);
+  background: var(--bre-color-surface);
+  color: var(--bre-color-text);
+  cursor: pointer;
+  line-height: 1.6;
+}
+
+.bre-table-btn:hover {
+  background: var(--bre-color-hover);
+}
+
+/* ───────────────────────────────────────────────
+   Media blocks (image, audio, video)
+─────────────────────────────────────────────── */
+.bre-image-block,
+.bre-audio-block,
+.bre-video-block {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* Image */
+.bre-image {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--bre-radius);
+  cursor: pointer;
+}
+
+.bre-image-placeholder,
+.bre-audio-placeholder,
+.bre-video-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  border: 2px dashed var(--bre-color-border);
+  border-radius: var(--bre-radius);
+  color: var(--bre-color-placeholder);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 16px;
+  text-align: center;
+}
+
+.bre-image-placeholder:hover,
+.bre-audio-placeholder:hover,
+.bre-video-placeholder:hover {
+  background: var(--bre-color-hover);
+}
+
+/* Audio */
+.bre-audio {
+  display: block;
+  width: 100%;
+}
+
+/* Video */
+.bre-video {
+  display: block;
+  width: 100%;
+  border-radius: var(--bre-radius);
+}
+
+.bre-video-embed {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  border-radius: var(--bre-radius);
+}
+
+/* Shared caption */
+.bre-media-caption {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.85rem;
+  color: var(--bre-color-placeholder);
+  text-align: center;
+  outline: none;
+}
+
+.bre-media-caption:focus {
+  color: var(--bre-color-text);
+}
+
+/* ───────────────────────────────────────────────
+   Virtualized renderer spacers
+─────────────────────────────────────────────── */
+.bre-virt-spacer-top,
+.bre-virt-spacer-bottom {
+  display: block;
+  width: 100%;
+  pointer-events: none;
+  will-change: height;
+}
+
+/* ───────────────────────────────────────────────
    Slash menu
 ─────────────────────────────────────────────── */
 .bre-slash-menu {

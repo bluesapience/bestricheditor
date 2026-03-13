@@ -1,6 +1,7 @@
 /**
- * Best Rich Editor — Stage 2
- * Block engine + 7 essential blocks + slash menu + drag + columns + BREM
+ * Best Rich Editor — Stage 5
+ * Block engine + all blocks + slash menu + drag + columns + BREM + BREW
+ * + Table, Image, Audio, Video + Virtualized rendering
  */
 
 import { createBremEditor } from '../modes/brem.js';
@@ -21,9 +22,11 @@ import '../blocks/formula.js';
 import { createState } from './state.js';
 import { createCommands } from './commands.js';
 import { createRenderer } from './renderer.js';
+import { createVirtualRenderer } from './virtualRenderer.js';
 import { blockRegistry } from './blockRegistry.js';
 import { createSlashMenu } from '../ui/slashMenu.js';
 import { initDragHandles } from '../ui/dragHandle.js';
+import { createVideoPlugin } from '../blocks/video.js';
 
 // Register all block types (side effects)
 import '../blocks/paragraph.js';
@@ -34,6 +37,9 @@ import '../blocks/code.js';
 import '../blocks/bulletedList.js';
 import '../blocks/numberedList.js';
 import '../ui/columns.js';
+import '../blocks/table.js';
+import '../blocks/image.js';
+import '../blocks/audio.js';
 
 // Slash menu items
 const SLASH_ITEMS = [
@@ -131,6 +137,34 @@ const SLASH_ITEMS = [
     description: 'Insert a KaTeX math formula',
     defaultData: null, // handled specially
   },
+  {
+    type: 'table',
+    label: 'Table',
+    icon: '⊞',
+    description: 'Insert a table',
+    defaultData: { rows: [['Header 1', 'Header 2'], ['', '']] },
+  },
+  {
+    type: 'image',
+    label: 'Image',
+    icon: '🖼',
+    description: 'Insert an image from URL',
+    defaultData: null, // handled specially
+  },
+  {
+    type: 'audio',
+    label: 'Audio',
+    icon: '♪',
+    description: 'Insert an audio file from URL',
+    defaultData: null, // handled specially
+  },
+  {
+    type: 'video',
+    label: 'Video',
+    icon: '▶',
+    description: 'Insert a video or YouTube/Vimeo embed',
+    defaultData: null, // handled specially
+  },
 ];
 
 function makeBlock(type, data) {
@@ -158,6 +192,10 @@ export function createEditor(container, options = {}) {
     ...options,
   };
 
+  // Register video plugin with the resolved embed allowlist (always overwrite so
+  // different editor instances can have different allowlists).
+  blockRegistry.register('video', createVideoPlugin(opts.embedAllowlist));
+
   // ── Mount ──────────────────────────────────────────────────────────────────
 
   const root = document.createElement('div');
@@ -169,7 +207,9 @@ export function createEditor(container, options = {}) {
 
   const state = createState();
   const commands = createCommands();
-  const renderer = createRenderer(root);
+  const renderer = opts.virtualize
+    ? createVirtualRenderer(root, state)
+    : createRenderer(root);
 
   // Initialize with one empty paragraph if no content
   const initBlock = makeBlock('paragraph', { text: '' });
@@ -242,18 +282,111 @@ export function createEditor(container, options = {}) {
   // ── Click Handler ──────────────────────────────────────────────────────────
 
   function handleClick(e) {
+    // Formula click-to-edit
     const formulaEl = e.target.closest('.bre-formula');
-    if (!formulaEl) return;
-    const blockEl = closestBlock(formulaEl);
+    if (formulaEl) {
+      const blockEl = closestBlock(formulaEl);
+      if (!blockEl) return;
+      const blockId = blockEl.getAttribute('data-bre-block-id');
+      const block = state.getBlock(blockId);
+      if (!block || block.type !== 'formula') return;
+      const currentLatex = block.data.latex || '';
+      const latex = prompt('Edit LaTeX formula:', currentLatex);
+      if (latex === null) return;
+      state.updateBlockData(blockId, { latex, displayMode: block.data.displayMode ?? true });
+      renderer.updateBlock(state.getBlock(blockId));
+      if (notifyChange) notifyChange();
+      return;
+    }
+
+    // Image click-to-set-src
+    const imgEl = e.target.closest('.bre-image, .bre-image-placeholder');
+    if (imgEl) {
+      const blockEl = closestBlock(imgEl);
+      if (!blockEl) return;
+      const blockId = blockEl.getAttribute('data-bre-block-id');
+      const block = state.getBlock(blockId);
+      if (!block || block.type !== 'image') return;
+      const url = prompt('Enter image URL:', block.data.src || '');
+      if (url === null) return;
+      const safe = url ? sanitizeURL(url) : '';
+      if (url && !safe) { alert('Invalid or unsafe URL.'); return; }
+      state.updateBlockData(blockId, { src: safe });
+      renderer.updateBlock(state.getBlock(blockId));
+      if (notifyChange) notifyChange();
+      return;
+    }
+
+    // Audio click-to-set-src
+    const audioEl = e.target.closest('.bre-audio, .bre-audio-placeholder');
+    if (audioEl) {
+      const blockEl = closestBlock(audioEl);
+      if (!blockEl) return;
+      const blockId = blockEl.getAttribute('data-bre-block-id');
+      const block = state.getBlock(blockId);
+      if (!block || block.type !== 'audio') return;
+      const url = prompt('Enter audio URL:', block.data.src || '');
+      if (url === null) return;
+      const safe = url ? sanitizeURL(url) : '';
+      if (url && !safe) { alert('Invalid or unsafe URL.'); return; }
+      state.updateBlockData(blockId, { src: safe });
+      renderer.updateBlock(state.getBlock(blockId));
+      if (notifyChange) notifyChange();
+      return;
+    }
+
+    // Video click-to-set-src
+    const videoEl = e.target.closest('.bre-video, .bre-video-embed, .bre-video-placeholder');
+    if (videoEl) {
+      const blockEl = closestBlock(videoEl);
+      if (!blockEl) return;
+      const blockId = blockEl.getAttribute('data-bre-block-id');
+      const block = state.getBlock(blockId);
+      if (!block || block.type !== 'video') return;
+      const url = prompt('Enter video URL or YouTube/Vimeo link:', block.data.src || '');
+      if (url === null) return;
+      const safe = url ? sanitizeURL(url) : '';
+      if (url && !safe) { alert('Invalid or unsafe URL.'); return; }
+      state.updateBlockData(blockId, { src: safe });
+      renderer.updateBlock(state.getBlock(blockId));
+      if (notifyChange) notifyChange();
+      return;
+    }
+
+    // Table toolbar actions
+    const tableActionEl = e.target.closest('[data-bre-table-action]');
+    if (tableActionEl) {
+      handleTableAction(tableActionEl);
+      return;
+    }
+  }
+
+  function handleTableAction(actionEl) {
+    const action = actionEl.getAttribute('data-bre-table-action');
+    const blockEl = closestBlock(actionEl);
     if (!blockEl) return;
     const blockId = blockEl.getAttribute('data-bre-block-id');
     const block = state.getBlock(blockId);
-    if (!block || block.type !== 'formula') return;
+    if (!block || block.type !== 'table') return;
 
-    const currentLatex = block.data.latex || '';
-    const latex = prompt('Edit LaTeX formula:', currentLatex);
-    if (latex === null) return; // cancelled
-    state.updateBlockData(blockId, { latex, displayMode: block.data.displayMode ?? true });
+    let rows = block.data.rows.map(r => [...r]);
+    switch (action) {
+      case 'add-row':
+        rows.push(new Array(rows[0].length).fill(''));
+        break;
+      case 'del-row':
+        if (rows.length > 1) rows = rows.slice(0, -1);
+        break;
+      case 'add-col':
+        rows = rows.map(r => [...r, '']);
+        break;
+      case 'del-col':
+        if (rows[0].length > 1) rows = rows.map(r => r.slice(0, -1));
+        break;
+      default:
+        return;
+    }
+    state.updateBlockData(blockId, { rows });
     renderer.updateBlock(state.getBlock(blockId));
     if (notifyChange) notifyChange();
   }
@@ -261,6 +394,14 @@ export function createEditor(container, options = {}) {
   // ── Input Handler ──────────────────────────────────────────────────────────
 
   function handleInput(e) {
+    // Table cell input — handle before generic field logic
+    const cellEl = e.target.closest('[data-bre-table-row]');
+    if (cellEl) {
+      handleTableCellInput(cellEl);
+      if (notifyChange) notifyChange();
+      return;
+    }
+
     const info = getFieldInfo(e.target);
     if (!info) return;
     const { fieldEl, blockId, fieldName } = info;
@@ -312,6 +453,26 @@ export function createEditor(container, options = {}) {
     if (notifyChange) notifyChange();
   }
 
+  function handleTableCellInput(cellEl) {
+    const row = parseInt(cellEl.getAttribute('data-bre-table-row'), 10);
+    const col = parseInt(cellEl.getAttribute('data-bre-table-col'), 10);
+    // Fix <br> left behind in empty contenteditable
+    if (cellEl.textContent === '' && cellEl.innerHTML !== '') cellEl.innerHTML = '';
+    const text = cellEl.textContent;
+
+    const blockEl = closestBlock(cellEl);
+    if (!blockEl) return;
+    const blockId = blockEl.getAttribute('data-bre-block-id');
+    const block = state.getBlock(blockId);
+    if (!block || block.type !== 'table') return;
+
+    const newRows = block.data.rows.map((r, ri) =>
+      ri !== row ? r : r.map((c, ci) => (ci !== col ? c : text))
+    );
+    // Update state without re-rendering — DOM already has correct text
+    state.updateBlockData(blockId, { rows: newRows });
+  }
+
   // ── Keydown Handler ────────────────────────────────────────────────────────
 
   function handleKeydown(e) {
@@ -351,6 +512,22 @@ export function createEditor(container, options = {}) {
         slashFieldEl = null;
         return;
       }
+    }
+
+    // Table cell keyboard handling
+    const tableCellEl = e.target.closest('[data-bre-table-row]');
+    if (tableCellEl) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        handleTableTab(tableCellEl, e.shiftKey);
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        // Prevent Enter from splitting the block; allow Shift+Enter for newline
+        e.preventDefault();
+        return;
+      }
+      return; // Let all other keys work naturally inside table cells
     }
 
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -604,6 +781,55 @@ export function createEditor(container, options = {}) {
     focusBlock(blocks[blockIndex + 1].id, 0);
   }
 
+  // ── Table Tab Navigation ───────────────────────────────────────────────────
+
+  function handleTableTab(cellEl, shiftKey) {
+    const row = parseInt(cellEl.getAttribute('data-bre-table-row'), 10);
+    const col = parseInt(cellEl.getAttribute('data-bre-table-col'), 10);
+    const blockEl = closestBlock(cellEl);
+    if (!blockEl) return;
+    const blockId = blockEl.getAttribute('data-bre-block-id');
+    const block = state.getBlock(blockId);
+    if (!block || block.type !== 'table') return;
+
+    const rows = block.data.rows;
+    const numRows = rows.length;
+    const numCols = rows[0] ? rows[0].length : 0;
+
+    let nextRow = row;
+    let nextCol = col;
+
+    if (!shiftKey) {
+      nextCol++;
+      if (nextCol >= numCols) { nextCol = 0; nextRow++; }
+      // At last cell — add a new row
+      if (nextRow >= numRows) {
+        const newRows = [...rows, new Array(numCols).fill('')];
+        state.updateBlockData(blockId, { rows: newRows });
+        renderer.updateBlock(state.getBlock(blockId));
+        nextRow = numRows;
+      }
+    } else {
+      nextCol--;
+      if (nextCol < 0) { nextCol = numCols - 1; nextRow--; }
+      if (nextRow < 0) return; // already at first cell
+    }
+
+    const targetCell = blockEl.querySelector(
+      `[data-bre-table-row="${nextRow}"][data-bre-table-col="${nextCol}"]`
+    );
+    if (targetCell) {
+      targetCell.focus();
+      // Move caret to end
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(targetCell);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
   // ── Link Insert (Cmd+K) ────────────────────────────────────────────────────
 
   function handleLinkInsert(fieldEl) {
@@ -700,6 +926,13 @@ export function createEditor(container, options = {}) {
       const latex = prompt('Enter LaTeX formula (e.g. E = mc^2):');
       if (!latex) return; // cancelled
       newData = { latex, displayMode: true };
+    } else if (item.type === 'image' || item.type === 'audio' || item.type === 'video') {
+      const label = item.type === 'video' ? 'video URL or YouTube/Vimeo link' : `${item.type} URL`;
+      const url = prompt(`Enter ${label}:`);
+      if (!url) return; // cancelled
+      const safe = sanitizeURL(url);
+      if (!safe) { alert('Invalid or unsafe URL.'); return; }
+      newData = { src: safe, caption: '' };
     } else {
       newData = { ...(item.defaultData || {}) };
     }
@@ -818,6 +1051,7 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('paste', handlePaste);
     root.removeEventListener('click', handleClick);
     slashMenu.destroy();
+    if (renderer.destroy) renderer.destroy();
     root.remove();
   }
 
