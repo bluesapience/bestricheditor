@@ -19,6 +19,43 @@ import '../blocks/code.js';
 import '../blocks/bulletedList.js';
 import '../blocks/numberedList.js';
 import '../ui/columns.js';
+import '../blocks/table.js';
+import '../blocks/image.js';
+import '../blocks/audio.js';
+import { createVideoPlugin } from '../blocks/video.js';
+
+// ── Module-level constants ─────────────────────────────────────────────────────
+
+const DEFAULT_EMBED_ALLOWLIST = ['youtube.com', 'youtu.be', 'vimeo.com'];
+
+/**
+ * Try to extract a safe embed URL for YouTube/Vimeo (mirrors video.js logic).
+ * Returns null if not a known embed provider.
+ */
+function brewGetEmbedUrl(src, embedAllowlist) {
+  if (!src) return null;
+  try {
+    const url = new URL(src);
+    const host = url.hostname.replace(/^www\./, '');
+    const allowed = (embedAllowlist || []).some(
+      d => host === d || host.endsWith('.' + d)
+    );
+    if (!allowed) return null;
+    if (host === 'youtube.com' || host === 'youtu.be') {
+      const id = host === 'youtu.be'
+        ? url.pathname.slice(1).split('?')[0]
+        : url.searchParams.get('v');
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+    }
+    if (host === 'vimeo.com') {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      return id ? `https://player.vimeo.com/video/${encodeURIComponent(id)}` : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -26,7 +63,7 @@ import '../ui/columns.js';
  * Convert a single block to its surface HTML representation.
  * Returns a string of HTML for that block (without list wrapper).
  */
-function blockToSurfaceHTMLSnippet(block) {
+function blockToSurfaceHTMLSnippet(block, embedAllowlist) {
   const id = block.id || generateId();
   switch (block.type) {
     case 'paragraph': {
@@ -69,6 +106,56 @@ function blockToSurfaceHTMLSnippet(block) {
         return `<p data-bre-id="${id}"><em>[Formula: ${escapeHTML(latex)}]</em></p>`;
       }
     }
+    case 'table': {
+      const rows = (block.data && Array.isArray(block.data.rows)) ? block.data.rows : [['Header 1', 'Header 2'], ['', '']];
+      const [headerRow, ...bodyRows] = rows;
+      const makeCell = (tag, content, rowIdx, colIdx) => {
+        const ph = rowIdx === 0 ? 'Header' : 'Cell';
+        return `<${tag} class="bre-table-cell" contenteditable="true" data-bre-table-row="${rowIdx}" data-bre-table-col="${colIdx}" data-bre-placeholder="${ph}">${escapeHTML(String(content))}</${tag}>`;
+      };
+      const thHTML = headerRow
+        ? `<thead><tr>${headerRow.map((c, ci) => makeCell('th', c, 0, ci)).join('')}</tr></thead>`
+        : '';
+      const tbHTML = bodyRows.length > 0
+        ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1, ci)).join('')}</tr>`).join('')}</tbody>`
+        : '';
+      const controls = `<div class="bre-table-controls"><button type="button" class="bre-table-btn" data-bre-table-action="add-row">+ Row</button><button type="button" class="bre-table-btn" data-bre-table-action="del-row">− Row</button><button type="button" class="bre-table-btn" data-bre-table-action="add-col">+ Col</button><button type="button" class="bre-table-btn" data-bre-table-action="del-col">− Col</button></div>`;
+      return `<div data-bre-type="table" data-bre-id="${id}" contenteditable="false" class="bre-table-wrapper"><table class="bre-table">${thHTML}${tbHTML}</table>${controls}</div>`;
+    }
+    case 'image': {
+      const src = (block.data && block.data.src) || '';
+      const alt = (block.data && block.data.alt) || '';
+      const caption = (block.data && block.data.caption) || '';
+      const inner = src
+        ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(alt)}" loading="lazy">`
+        : `<div class="bre-image-placeholder">Click to set image URL</div>`;
+      const cap = `<figcaption class="bre-media-caption">${escapeHTML(caption)}</figcaption>`;
+      return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(alt)}" data-bre-caption="${escapeHTML(caption)}" contenteditable="false" class="bre-image-block">${inner}${cap}</figure>`;
+    }
+    case 'audio': {
+      const src = (block.data && block.data.src) || '';
+      const caption = (block.data && block.data.caption) || '';
+      const inner = src
+        ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
+        : `<div class="bre-audio-placeholder">Click to set audio URL</div>`;
+      const cap = `<figcaption class="bre-media-caption">${escapeHTML(caption)}</figcaption>`;
+      return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(caption)}" contenteditable="false" class="bre-audio-block">${inner}${cap}</figure>`;
+    }
+    case 'video': {
+      const src = (block.data && block.data.src) || '';
+      const caption = (block.data && block.data.caption) || '';
+      const embedUrl = brewGetEmbedUrl(src, embedAllowlist || DEFAULT_EMBED_ALLOWLIST);
+      let inner;
+      if (!src) {
+        inner = `<div class="bre-video-placeholder">Click to set video URL or paste a YouTube/Vimeo link</div>`;
+      } else if (embedUrl) {
+        inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
+      } else {
+        inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
+      }
+      const cap = `<figcaption class="bre-media-caption">${escapeHTML(caption)}</figcaption>`;
+      return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(caption)}" contenteditable="false" class="bre-video-block">${inner}${cap}</figure>`;
+    }
     case 'columns': {
       return `<p data-bre-type="paragraph" data-bre-id="${id}"><em>[Columns block — edit in BRE mode]</em></p>`;
     }
@@ -82,7 +169,7 @@ function blockToSurfaceHTMLSnippet(block) {
 /**
  * Convert an array of blocks to surface innerHTML (with UL/OL grouping).
  */
-function blocksToSurfaceHTML(blocks) {
+function blocksToSurfaceHTML(blocks, embedAllowlist) {
   const parts = [];
   let i = 0;
   while (i < blocks.length) {
@@ -91,7 +178,7 @@ function blocksToSurfaceHTML(blocks) {
     if (block.type === 'bulleted_list') {
       const items = [];
       while (i < blocks.length && blocks[i].type === 'bulleted_list') {
-        items.push(blockToSurfaceHTMLSnippet(blocks[i]));
+        items.push(blockToSurfaceHTMLSnippet(blocks[i], embedAllowlist));
         i++;
       }
       parts.push(`<ul>${items.join('')}</ul>`);
@@ -101,14 +188,14 @@ function blocksToSurfaceHTML(blocks) {
     if (block.type === 'numbered_list') {
       const items = [];
       while (i < blocks.length && blocks[i].type === 'numbered_list') {
-        items.push(blockToSurfaceHTMLSnippet(blocks[i]));
+        items.push(blockToSurfaceHTMLSnippet(blocks[i], embedAllowlist));
         i++;
       }
       parts.push(`<ol>${items.join('')}</ol>`);
       continue;
     }
 
-    parts.push(blockToSurfaceHTMLSnippet(block));
+    parts.push(blockToSurfaceHTMLSnippet(block, embedAllowlist));
     i++;
   }
   return parts.join('');
@@ -182,9 +269,47 @@ function surfaceToBlocks(surface) {
         blocks.push({ id, type: 'divider', data: {} });
         break;
       }
+      case 'FIGURE': {
+        const type = node.dataset && node.dataset.breType;
+        if (type === 'image') {
+          blocks.push({ id, type: 'image', data: {
+            src: (node.dataset && node.dataset.breSrc) || '',
+            alt: (node.dataset && node.dataset.breAlt) || '',
+            caption: (node.dataset && node.dataset.breCaption) || '',
+          }});
+        } else if (type === 'audio') {
+          blocks.push({ id, type: 'audio', data: {
+            src: (node.dataset && node.dataset.breSrc) || '',
+            caption: (node.dataset && node.dataset.breCaption) || '',
+          }});
+        } else if (type === 'video') {
+          blocks.push({ id, type: 'video', data: {
+            src: (node.dataset && node.dataset.breSrc) || '',
+            caption: (node.dataset && node.dataset.breCaption) || '',
+          }});
+        }
+        break;
+      }
       case 'DIV': {
-        // Chrome wraps new lines in divs — treat as paragraph
-        blocks.push({ id, type: 'paragraph', data: { text: node.textContent || '' } });
+        const breType = node.dataset && node.dataset.breType;
+        if (breType === 'table') {
+          // Read cell text from the editable table cells
+          const rows = [];
+          const tableEl = node.querySelector('table');
+          if (tableEl) {
+            for (const tr of tableEl.querySelectorAll('tr')) {
+              const row = [];
+              for (const cell of tr.querySelectorAll('th, td')) {
+                row.push(cell.textContent || '');
+              }
+              if (row.length > 0) rows.push(row);
+            }
+          }
+          blocks.push({ id, type: 'table', data: { rows } });
+        } else {
+          // Chrome wraps new lines in divs — treat as paragraph
+          blocks.push({ id, type: 'paragraph', data: { text: node.textContent || '' } });
+        }
         break;
       }
       default: {
@@ -261,8 +386,14 @@ export function createBrewEditor(container, options = {}) {
   const opts = {
     mode: 'BREW',
     onChange: null,
+    embedAllowlist: DEFAULT_EMBED_ALLOWLIST,
     ...options,
   };
+
+  // Register video plugin if not already registered (e.g. when BREW used standalone)
+  if (!blockRegistry.has('video')) {
+    blockRegistry.register('video', createVideoPlugin(opts.embedAllowlist));
+  }
 
   // Internal document state
   let _blocks = [];
@@ -345,6 +476,21 @@ export function createBrewEditor(container, options = {}) {
   toolbar.appendChild(btnDivider);
   toolbar.appendChild(btnLink);
   toolbar.appendChild(btnFormula);
+
+  // Separator
+  const sep4 = document.createElement('div');
+  sep4.className = 'bre-brew-toolbar-sep';
+  toolbar.appendChild(sep4);
+
+  // Media / table insert buttons
+  const btnTable = createToolbarBtn('⊞', 'table', 'Insert Table');
+  const btnImage = createToolbarBtn('🖼', 'image', 'Insert Image');
+  const btnAudio = createToolbarBtn('♪', 'audio', 'Insert Audio');
+  const btnVideo = createToolbarBtn('▶', 'video', 'Insert Video');
+  toolbar.appendChild(btnTable);
+  toolbar.appendChild(btnImage);
+  toolbar.appendChild(btnAudio);
+  toolbar.appendChild(btnVideo);
 
   // Surface
   const surface = document.createElement('div');
@@ -754,6 +900,217 @@ export function createBrewEditor(container, options = {}) {
     }
   }
 
+  // ── Table actions (add/remove rows & cols) ─────────────────────────────────
+
+  function reindexTable(table) {
+    table.querySelectorAll('tr').forEach((tr, rowIndex) => {
+      tr.querySelectorAll('th, td').forEach((cell, colIndex) => {
+        cell.setAttribute('data-bre-table-row', String(rowIndex));
+        cell.setAttribute('data-bre-table-col', String(colIndex));
+      });
+    });
+  }
+
+  function handleTableAction(action, wrapper) {
+    const table = wrapper.querySelector('table');
+    if (!table) return;
+
+    if (action === 'add-row') {
+      const firstRow = table.querySelector('tr');
+      const colCount = firstRow ? firstRow.querySelectorAll('th, td').length : 2;
+      let tbody = table.querySelector('tbody');
+      if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
+      const tr = document.createElement('tr');
+      for (let c = 0; c < colCount; c++) {
+        const td = document.createElement('td');
+        td.className = 'bre-table-cell';
+        td.setAttribute('contenteditable', 'true');
+        td.setAttribute('data-bre-placeholder', 'Cell');
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+      reindexTable(table);
+
+    } else if (action === 'del-row') {
+      const tbody = table.querySelector('tbody');
+      if (!tbody) return;
+      const rows = tbody.querySelectorAll('tr');
+      if (rows.length > 0) rows[rows.length - 1].remove();
+
+    } else if (action === 'add-col') {
+      table.querySelectorAll('tr').forEach((tr, rowIndex) => {
+        const isHeader = rowIndex === 0;
+        const cell = document.createElement(isHeader ? 'th' : 'td');
+        cell.className = 'bre-table-cell';
+        cell.setAttribute('contenteditable', 'true');
+        cell.setAttribute('data-bre-placeholder', isHeader ? 'Header' : 'Cell');
+        tr.appendChild(cell);
+      });
+      reindexTable(table);
+
+    } else if (action === 'del-col') {
+      table.querySelectorAll('tr').forEach(tr => {
+        const cells = tr.querySelectorAll('th, td');
+        if (cells.length > 1) cells[cells.length - 1].remove();
+      });
+    }
+  }
+
+  // Delegate input events from table cells (contenteditable="true" islands inside
+  // contenteditable="false" wrappers don't bubble to the surface's input listener).
+  root.addEventListener('input', (e) => {
+    if (e.target.closest('[data-bre-type="table"]')) {
+      debouncedSync();
+    }
+  });
+
+  // ── Table insert + edit ────────────────────────────────────────────────────
+
+  btnTable.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    insertMediaBlock({ type: 'table' });
+  });
+
+  /**
+   * Insert a new media/table figure block after the current cursor position.
+   */
+  function insertMediaBlock(block) {
+    const id = generateId();
+    const html = blockToSurfaceHTMLSnippet({ ...block, id }, opts.embedAllowlist);
+    const safe = sanitizeHTML(html, { allowKaTeX: false, allowMedia: true });
+    surface.focus();
+    document.execCommand('insertHTML', false, safe + '<p><br></p>');
+    debouncedSync();
+  }
+
+  /**
+   * Show a dialog to edit a media figure (image/audio/video).
+   */
+  function showMediaDialog(figureEl) {
+    const type = figureEl.dataset.breType;
+
+    // Image / Audio / Video: edit src + caption
+    showMediaSrcDialog(
+      {
+        src: figureEl.dataset.breSrc || '',
+        alt: type === 'image' ? (figureEl.dataset.breAlt || '') : null,
+        caption: figureEl.dataset.breCaption || '',
+        type,
+      },
+      ({ src, alt, caption }) => {
+        const safe = sanitizeURL(src);
+        figureEl.dataset.breSrc = safe;
+        if (type === 'image') figureEl.dataset.breAlt = alt || '';
+        figureEl.dataset.breCaption = caption || '';
+
+        // Re-render the inner media element
+        const newSnippet = blockToSurfaceHTMLSnippet(
+          { id: figureEl.dataset.breId, type, data: { src: safe, alt: alt || '', caption: caption || '' } },
+          opts.embedAllowlist
+        );
+        const tmp = document.createElement('div');
+        tmp.innerHTML = sanitizeHTML(newSnippet, { allowKaTeX: false, allowMedia: true });
+        const newFig = tmp.firstElementChild;
+        if (newFig && figureEl.parentNode) {
+          figureEl.parentNode.replaceChild(newFig, figureEl);
+        }
+        debouncedSync();
+      }
+    );
+  }
+
+  /**
+   * Small inline dialog to edit src (+ alt for images) + caption for media blocks.
+   */
+  function showMediaSrcDialog({ src, alt, caption, type }, onSave) {
+    const existing = root.querySelector('.bre-brew-media-dialog');
+    if (existing) existing.remove();
+
+    const dialog = document.createElement('div');
+    dialog.className = 'bre-brew-link-dialog bre-brew-media-dialog';
+
+    function makeField(placeholder, value) {
+      const f = document.createElement('input');
+      f.type = 'text';
+      f.placeholder = placeholder;
+      f.value = value || '';
+      f.className = 'bre-brew-link-input';
+      dialog.appendChild(f);
+      return f;
+    }
+
+    const srcField     = makeField(type === 'image' ? 'Image URL' : type === 'audio' ? 'Audio URL' : 'Video URL or YouTube/Vimeo link', src);
+    const altField     = type === 'image' ? makeField('Alt text', alt) : null;
+    const captionField = makeField('Caption (optional)', caption);
+
+    const actions = document.createElement('div');
+    actions.className = 'bre-brew-link-actions';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Save';
+    saveBtn.className = 'bre-brew-link-save';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'bre-brew-link-cancel';
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+    dialog.appendChild(actions);
+    root.appendChild(dialog);
+    srcField.focus();
+
+    function close() { dialog.remove(); }
+    saveBtn.addEventListener('click', () => {
+      const newSrc = srcField.value.trim();
+      if (!newSrc) { srcField.style.outline = '2px solid red'; return; }
+      const safe = sanitizeURL(newSrc);
+      if (!safe && !brewGetEmbedUrl(newSrc, opts.embedAllowlist)) {
+        srcField.style.outline = '2px solid red';
+        return;
+      }
+      close();
+      onSave({ src: newSrc, alt: altField ? altField.value.trim() : '', caption: captionField.value.trim() });
+    });
+    cancelBtn.addEventListener('click', close);
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+      if (e.key === 'Enter') saveBtn.click();
+    });
+    setTimeout(() => {
+      document.addEventListener('mousedown', function outsideClick(e) {
+        if (!dialog.contains(e.target)) {
+          close();
+          document.removeEventListener('mousedown', outsideClick);
+        }
+      });
+    }, 0);
+  }
+
+  // Image / Audio / Video toolbar buttons
+  btnImage.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    showMediaSrcDialog({ src: '', alt: '', caption: '', type: 'image' }, ({ src, alt, caption }) => {
+      insertMediaBlock({ type: 'image', data: { src, alt, caption } });
+    });
+  });
+
+  btnAudio.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    showMediaSrcDialog({ src: '', caption: '', type: 'audio' }, ({ src, caption }) => {
+      insertMediaBlock({ type: 'audio', data: { src, caption } });
+    });
+  });
+
+  btnVideo.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    showMediaSrcDialog({ src: '', caption: '', type: 'video' }, ({ src, caption }) => {
+      insertMediaBlock({ type: 'video', data: { src, caption } });
+    });
+  });
+
   // ── Formula click-to-edit ──────────────────────────────────────────────────
 
   surface.addEventListener('click', (e) => {
@@ -774,6 +1131,30 @@ export function createBrewEditor(container, options = {}) {
         }
       );
       return;
+    }
+
+    // Table control buttons (+ Row, − Row, + Col, − Col)
+    const tableActionBtn = e.target.closest('[data-bre-table-action]');
+    if (tableActionBtn && surface.contains(tableActionBtn)) {
+      e.preventDefault();
+      const action = tableActionBtn.getAttribute('data-bre-table-action');
+      const tableWrapper = tableActionBtn.closest('[data-bre-type="table"]');
+      if (tableWrapper) {
+        handleTableAction(action, tableWrapper);
+        debouncedSync();
+      }
+      return;
+    }
+
+    // Click-to-edit media figures (image/audio/video)
+    const mediaFigure = e.target.closest('figure[data-bre-type]');
+    if (mediaFigure && surface.contains(mediaFigure)) {
+      const mtype = mediaFigure.dataset.breType;
+      if (['image', 'audio', 'video'].includes(mtype)) {
+        e.preventDefault();
+        showMediaDialog(mediaFigure);
+        return;
+      }
     }
 
     const formulaEl = e.target.closest('[data-bre-type="formula"]');
@@ -908,9 +1289,9 @@ export function createBrewEditor(container, options = {}) {
     };
     _blocks = doc.blocks.map(b => ({ ...b }));
 
-    const html = blocksToSurfaceHTML(_blocks);
+    const html = blocksToSurfaceHTML(_blocks, opts.embedAllowlist);
     // Use DOMPurify via sanitizeHTML with a permissive profile to allow data-bre-* attributes
-    const safe = sanitizeHTML(html, { allowKaTeX: false });
+    const safe = sanitizeHTML(html, { allowKaTeX: false, allowMedia: true });
     surface.innerHTML = safe;
     updateToolbarState();
   }
@@ -918,7 +1299,7 @@ export function createBrewEditor(container, options = {}) {
   function getHTML() {
     _blocks = surfaceToBlocks(surface);
     const raw = blocksToHTML(_blocks);
-    return sanitizeHTML(raw, { allowKaTeX: false });
+    return sanitizeHTML(raw, { allowKaTeX: false, allowMedia: true });
   }
 
   function destroy() {

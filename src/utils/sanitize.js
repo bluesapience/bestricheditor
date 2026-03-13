@@ -35,7 +35,7 @@ export function sanitizeHTML(html, { allowKaTeX = false, allowMedia = false } = 
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
-  const addAttr = ['style', 'encoding'];
+  const addAttr = ['style', 'encoding', 'contenteditable'];
 
   if (allowMedia) {
     // Allow iframe for embed-only srcs; DOMPurify hook validates the src.

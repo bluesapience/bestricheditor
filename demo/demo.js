@@ -350,6 +350,40 @@ const BREW_DOC = {
       type: 'formula',
       data: { latex: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}', displayMode: true },
     },
+    {
+      id: 'bw15',
+      type: 'heading',
+      data: { level: 2, text: 'Media & Table' },
+    },
+    {
+      id: 'bw16',
+      type: 'table',
+      data: {
+        rows: [
+          ['Feature', 'BRE', 'BREM', 'BREW'],
+          ['Slash menu', '✓', '—', '—'],
+          ['Markdown preview', '—', '✓', '—'],
+          ['Toolbar', '—', '—', '✓'],
+        ],
+      },
+    },
+    {
+      id: 'bw17',
+      type: 'image',
+      data: {
+        src: 'https://images.unsplash.com/photo-1506748686214-e9df14d4d9d0?w=800',
+        alt: 'Calm lake at sunrise',
+        caption: 'Click the image block to edit its URL or caption.',
+      },
+    },
+    {
+      id: 'bw18',
+      type: 'video',
+      data: {
+        src: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        caption: 'YouTube embed — click to change the URL.',
+      },
+    },
   ],
 };
 
