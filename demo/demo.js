@@ -120,6 +120,77 @@ const BRE_DOC = {
   ],
 };
 
+// ── BREW sample document ───────────────────────────────────────────────────────
+
+const BREW_DOC = {
+  id: 'brew-demo',
+  version: 1,
+  created: Date.now(),
+  updated: Date.now(),
+  blocks: [
+    {
+      id: 'bw1',
+      type: 'heading',
+      data: { level: 1, text: 'BREW — WYSIWYG Mode' },
+    },
+    {
+      id: 'bw2',
+      type: 'paragraph',
+      data: {
+        text: 'This is a WYSIWYG contenteditable editor. Use the toolbar to format text, change block types, or insert elements.',
+      },
+    },
+    {
+      id: 'bw3',
+      type: 'heading',
+      data: { level: 2, text: 'Text Formatting' },
+    },
+    {
+      id: 'bw4',
+      type: 'paragraph',
+      data: { text: 'Select text and use Bold (⌘B), Italic (⌘I), or Underline (⌘U) from the toolbar.' },
+    },
+    {
+      id: 'bw5',
+      type: 'quote',
+      data: { text: 'The best way to predict the future is to invent it. — Alan Kay' },
+    },
+    {
+      id: 'bw6',
+      type: 'bulleted_list',
+      data: { text: 'First bulleted item' },
+    },
+    {
+      id: 'bw7',
+      type: 'bulleted_list',
+      data: { text: 'Second bulleted item' },
+    },
+    {
+      id: 'bw8',
+      type: 'numbered_list',
+      data: { text: 'First numbered item' },
+    },
+    {
+      id: 'bw9',
+      type: 'numbered_list',
+      data: { text: 'Second numbered item' },
+    },
+    {
+      id: 'bw10',
+      type: 'divider',
+      data: {},
+    },
+    {
+      id: 'bw11',
+      type: 'code',
+      data: {
+        language: 'javascript',
+        code: 'const editor = createEditor(container, { mode: "BREW" });\neditor.setJSON(doc);\nconsole.log(editor.getHTML());',
+      },
+    },
+  ],
+};
+
 // ── BREM sample markdown ───────────────────────────────────────────────────────
 
 const BREM_SAMPLE = `# BREM — Markdown Mode
@@ -245,6 +316,8 @@ document.querySelectorAll('.demo-tab').forEach(tab => {
           },
         ],
       });
+    } else if (mode === 'BREW') {
+      editor.setJSON(BREW_DOC);
     } else {
       editor.setJSON(BRE_DOC);
     }

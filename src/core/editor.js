@@ -4,6 +4,7 @@
  */
 
 import { createBremEditor } from '../modes/brem.js';
+import { createBrewEditor } from '../modes/brew.js';
 import { generateId } from '../utils/id.js';
 import { debounce } from '../utils/debounce.js';
 import {
@@ -116,6 +117,10 @@ export function createEditor(container, options = {}) {
 
   if (options.mode === 'BREM') {
     return createBremEditor(container, options);
+  }
+
+  if (options.mode === 'BREW') {
+    return createBrewEditor(container, options);
   }
 
   const opts = {

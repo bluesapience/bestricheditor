@@ -42,4 +42,14 @@ export const blockRegistry = {
   all() {
     return Array.from(_registry.entries());
   },
+
+  /**
+   * Return the capabilities of a registered block type.
+   * Falls back to a safe default if the plugin has no capabilities defined.
+   */
+  getCapabilities(type) {
+    const plugin = _registry.get(type);
+    if (plugin && plugin.capabilities) return plugin.capabilities;
+    return { inline: false, marks: [], links: false };
+  },
 };
