@@ -441,8 +441,75 @@ if (card) {
     URL.revokeObjectURL(url);
   });
 
+  // ── Perf benchmark ────────────────────────────────────────────────────────
+
+  function runPerfTest(blockCount) {
+    editor.destroy();
+
+    const BLOCK_TYPES = [
+      () => ({ type: 'paragraph', data: { text: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor.' } }),
+      () => ({ type: 'heading',   data: { level: 2, text: 'Section Heading' } }),
+      () => ({ type: 'quote',     data: { text: 'The best way to predict the future is to invent it.' } }),
+      () => ({ type: 'bulleted_list', data: { text: 'List item content' } }),
+      () => ({ type: 'code',      data: { language: 'js', code: 'const x = 1 + 2;\nconsole.log(x);' } }),
+    ];
+
+    let id = 0;
+    const blocks = Array.from({ length: blockCount }, (_, i) => ({
+      id: `perf-${id++}`,
+      ...BLOCK_TYPES[i % BLOCK_TYPES.length](),
+    }));
+
+    const doc = { id: 'perf-doc', version: 1, created: Date.now(), updated: Date.now(), blocks };
+
+    // Test 1: non-virtual
+    editor = createEditor(container, { mode: 'BRE' });
+    const t0 = performance.now();
+    editor.setJSON(doc);
+    const nonVirtTime = performance.now() - t0;
+    editor.destroy();
+
+    // Test 2: virtual
+    editor = createEditor(container, { mode: 'BRE', virtualize: true });
+    const t1 = performance.now();
+    editor.setJSON(doc);
+    const virtTime = performance.now() - t1;
+
+    window.__bre = editor;
+
+    const domNonVirt = blockCount; // all blocks rendered
+    const domVirt = Math.min(blockCount, 60); // only first OVERSCAN×2 blocks
+
+    console.group(`[BRE] Perf — ${blockCount} blocks`);
+    console.log(`Non-virtual setJSON: ${nonVirtTime.toFixed(1)} ms  (${domNonVirt} DOM nodes)`);
+    console.log(`Virtual    setJSON: ${virtTime.toFixed(1)} ms  (~${domVirt} DOM nodes)`);
+    console.log(`Speedup: ${(nonVirtTime / virtTime).toFixed(1)}×`);
+    console.groupEnd();
+
+    alert(
+      `${blockCount}-block perf (check console for details)\n\n` +
+      `Non-virtual: ${nonVirtTime.toFixed(1)} ms  (${domNonVirt} DOM nodes)\n` +
+      `Virtual:     ${virtTime.toFixed(1)} ms  (~${domVirt} DOM nodes)\n` +
+      `Speedup:     ${(nonVirtTime / virtTime).toFixed(1)}×`
+    );
+  }
+
+  const btnPerf500 = document.createElement('button');
+  btnPerf500.textContent = 'Perf 500';
+  btnPerf500.title = 'Benchmark: render 500 blocks (virtual vs non-virtual)';
+  btnPerf500.style.cssText = 'padding:6px 14px;border:1px solid #8b5cf6;background:#f5f3ff;color:#6d28d9;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;';
+  btnPerf500.addEventListener('click', () => runPerfTest(500));
+
+  const btnPerf1000 = document.createElement('button');
+  btnPerf1000.textContent = 'Perf 1000';
+  btnPerf1000.title = 'Benchmark: render 1000 blocks (virtual vs non-virtual)';
+  btnPerf1000.style.cssText = 'padding:6px 14px;border:1px solid #8b5cf6;background:#f5f3ff;color:#6d28d9;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;';
+  btnPerf1000.addEventListener('click', () => runPerfTest(1000));
+
   toolbar.appendChild(btnJSON);
   toolbar.appendChild(btnHTML);
+  toolbar.appendChild(btnPerf500);
+  toolbar.appendChild(btnPerf1000);
   card.appendChild(toolbar);
 }
 

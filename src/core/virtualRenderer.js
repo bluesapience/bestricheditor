@@ -6,16 +6,15 @@
  * Per-block heights are cached after measurement.
  *
  * Performance design:
- *  - containerOffset is cached and only refreshed on resize, avoiding
- *    getBoundingClientRect() on every scroll frame.
- *  - scrollParent is cached once at attach time; calcVisibleWindow uses it
- *    directly instead of walking the DOM every frame.
- *  - Both top- and bottom-entering blocks are batched into DocumentFragments
- *    to minimise layout thrashing.
- *  - renderAll uses a single DocumentFragment for the initial paint.
- *  - Heights are measured after the first paint so spacers start accurate.
- *  - State subscriber only calls updateSpacers when block count changes
- *    (drag-reorder / insert / delete), not on every keystroke.
+ *  - Prefix sum array (Float64Array) gives O(1) spacer heights and O(log n)
+ *    binary-search window finding. Rebuilt lazily when any height changes.
+ *  - containerOffset is cached, only refreshed on resize → no getBoundingClientRect
+ *    on scroll frames.
+ *  - scrollParent is resolved once at attach time.
+ *  - Both top- and bottom-entering blocks batched into DocumentFragments.
+ *  - renderAll uses one DocumentFragment for the initial paint.
+ *  - Heights measured after first paint so spacers are accurate from the start.
+ *  - State subscriber only calls updateSpacers on block-count changes (not keystrokes).
  *
  * Usage: createVirtualRenderer(container, state)
  */
@@ -68,9 +67,29 @@ export function createVirtualRenderer(container, state) {
   let rafPending = false;
 
   // Cached layout values — refreshed once at attach time and on resize.
-  // Avoids getBoundingClientRect() + findScrollParent() on every scroll frame.
   let scrollParent = null;
   let cachedContainerOffset = 0;
+
+  // ── Prefix sum ──────────────────────────────────────────────────────────
+  // prefixSums[i] = total height of blocks[0..i-1].
+  // null means dirty — rebuilt lazily on next access via buildPrefixSums().
+  // This makes calcTopHeight / calcBottomHeight O(1) and calcVisibleWindow
+  // O(log n) (binary search) instead of O(n) linear scans.
+  /** @type {Float64Array|null} */
+  let prefixSums = null;
+
+  function invalidatePrefix() {
+    prefixSums = null;
+  }
+
+  function buildPrefixSums() {
+    if (prefixSums !== null) return;
+    const len = blocks.length;
+    prefixSums = new Float64Array(len + 1);
+    for (let i = 0; i < len; i++) {
+      prefixSums[i + 1] = prefixSums[i] + estimateHeight(blocks[i].id);
+    }
+  }
 
   // Spacer elements maintain scroll height for off-screen blocks
   const topSpacer = document.createElement('div');
@@ -79,7 +98,7 @@ export function createVirtualRenderer(container, state) {
   const bottomSpacer = document.createElement('div');
   bottomSpacer.className = 'bre-virt-spacer-bottom';
 
-  // Find the nearest scrollable ancestor (or window)
+  // Find the nearest scrollable ancestor (or window). Called once at attach.
   function findScrollParent(el) {
     let node = el.parentElement;
     while (node && node !== document.documentElement) {
@@ -106,7 +125,11 @@ export function createVirtualRenderer(container, state) {
     const el = blockMap.get(id);
     if (el) {
       const h = el.getBoundingClientRect().height;
-      if (h > 0) heightCache.set(id, h);
+      // Only invalidate prefix when height actually changed
+      if (h > 0 && heightCache.get(id) !== h) {
+        heightCache.set(id, h);
+        invalidatePrefix();
+      }
     }
   }
 
@@ -118,20 +141,16 @@ export function createVirtualRenderer(container, state) {
     updateSpacers();
   }
 
+  // O(1) after prefix build
   function calcTopHeight() {
-    let h = 0;
-    for (let i = 0; i < visibleStart; i++) {
-      h += estimateHeight(blocks[i].id);
-    }
-    return h;
+    buildPrefixSums();
+    return prefixSums[visibleStart];
   }
 
+  // O(1) after prefix build
   function calcBottomHeight() {
-    let h = 0;
-    for (let i = visibleEnd + 1; i < blocks.length; i++) {
-      h += estimateHeight(blocks[i].id);
-    }
-    return h;
+    buildPrefixSums();
+    return prefixSums[blocks.length] - prefixSums[visibleEnd + 1];
   }
 
   function updateSpacers() {
@@ -157,12 +176,14 @@ export function createVirtualRenderer(container, state) {
     }
   }
 
-  // ── Window calculation ───────────────────────────────────────────────────
-  // Uses cached scrollParent and cachedContainerOffset — no DOM reads.
+  // ── Window calculation (O(log n) binary search) ───────────────────────────
+  // Uses cached scrollParent + containerOffset — zero DOM reads per scroll frame
+  // after the prefix sum is built.
 
   function calcVisibleWindow() {
-    let scrollTop, viewHeight;
+    buildPrefixSums();
 
+    let scrollTop, viewHeight;
     if (scrollParent === window) {
       scrollTop = window.scrollY;
       viewHeight = window.innerHeight;
@@ -173,31 +194,25 @@ export function createVirtualRenderer(container, state) {
 
     const viewTop = scrollTop - cachedContainerOffset;
     const viewBottom = viewTop + viewHeight;
+    const n = blocks.length;
 
-    // Walk heights to find first/last visible block
-    let cumHeight = 0;
-    let newStart = 0;
-    let newEnd = blocks.length - 1;
-
-    for (let i = 0; i < blocks.length; i++) {
-      const h = estimateHeight(blocks[i].id);
-      if (cumHeight + h >= viewTop) {
-        newStart = Math.max(0, i - OVERSCAN);
-        break;
-      }
-      cumHeight += h;
+    // Binary search: first block whose bottom edge reaches viewTop
+    let lo = 0, hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (prefixSums[mid + 1] < viewTop) lo = mid + 1;
+      else hi = mid;
     }
+    const newStart = Math.max(0, lo - OVERSCAN);
 
-    cumHeight = 0;
-    for (let i = 0; i < newStart; i++) cumHeight += estimateHeight(blocks[i].id);
-
-    for (let i = newStart; i < blocks.length; i++) {
-      cumHeight += estimateHeight(blocks[i].id);
-      if (cumHeight >= viewBottom) {
-        newEnd = Math.min(blocks.length - 1, i + OVERSCAN);
-        break;
-      }
+    // Binary search: first block whose bottom edge reaches viewBottom
+    lo = 0; hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (prefixSums[mid + 1] < viewBottom) lo = mid + 1;
+      else hi = mid;
     }
+    const newEnd = Math.min(n - 1, lo + OVERSCAN);
 
     return { newStart, newEnd };
   }
@@ -289,11 +304,13 @@ export function createVirtualRenderer(container, state) {
   }
 
   // Keep internal blocks array in sync (drag reorder, insert, delete).
-  // Only call updateSpacers when block count changes — not on every keystroke.
+  // Only updateSpacers when block count changes — not on every keystroke.
   let prevBlockCount = 0;
   const unsubscribe = state.subscribe((doc) => {
+    const countChanged = doc.blocks.length !== prevBlockCount;
     blocks = doc.blocks;
-    if (blocks.length !== prevBlockCount) {
+    invalidatePrefix(); // block list or order may have changed
+    if (countChanged) {
       prevBlockCount = blocks.length;
       updateSpacers();
     }
@@ -307,6 +324,7 @@ export function createVirtualRenderer(container, state) {
     prevBlockCount = blocks.length;
     blockMap.clear();
     heightCache.clear();
+    invalidatePrefix();
     container.innerHTML = '';
     container.appendChild(topSpacer);
     container.appendChild(bottomSpacer);
@@ -323,7 +341,7 @@ export function createVirtualRenderer(container, state) {
     visibleStart = 0;
     visibleEnd = Math.min(blocks.length - 1, OVERSCAN * 2);
 
-    // Batch all initial elements into a single fragment — one DOM write
+    // Single DocumentFragment — one DOM write for all initial blocks
     const frag = document.createDocumentFragment();
     for (let i = visibleStart; i <= visibleEnd; i++) {
       const el = renderBlockEl(blocks[i]);
@@ -338,7 +356,7 @@ export function createVirtualRenderer(container, state) {
 
     attachScroll();
 
-    // Measure actual block heights after first paint so spacers are accurate.
+    // Measure actual heights after first paint — corrects spacer estimates.
     requestAnimationFrame(() => {
       if (blocks.length > 0) measureVisibleAndUpdateSpacers();
     });
@@ -356,11 +374,9 @@ export function createVirtualRenderer(container, state) {
   }
 
   function insertBlock(block, afterId) {
-    // Find insert index
     const afterIdx = blocks.findIndex(b => b.id === afterId);
     const insertIdx = afterIdx === -1 ? blocks.length : afterIdx + 1;
 
-    // State subscription will update blocks array; handle DOM here
     if (insertIdx >= visibleStart && insertIdx <= visibleEnd + 1) {
       const el = renderBlockEl(block);
       blockMap.set(block.id, el);
@@ -376,6 +392,7 @@ export function createVirtualRenderer(container, state) {
       if (block.type === 'columns') registerSubBlocks(block);
     }
 
+    invalidatePrefix();
     updateSpacers();
   }
 
@@ -386,6 +403,7 @@ export function createVirtualRenderer(container, state) {
       blockMap.delete(id);
       if (visibleEnd > visibleStart) visibleEnd--;
     }
+    invalidatePrefix();
     updateSpacers();
   }
 

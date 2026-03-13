@@ -240,3 +240,24 @@ dist/               # Rollup output (gitignored)
 rollup.config.js
 package.json
 ```
+
+#### Virtual renderer performance design (`src/core/virtualRenderer.js`)
+
+- **Prefix sum array** (`Float64Array`) — `prefixSums[i]` = total pixel height of blocks 0..i-1. Built lazily, invalidated when any measured height changes. Gives O(1) spacer heights and O(log n) binary-search window finding instead of O(n) linear scans.
+- **Cached `scrollParent` + `containerOffset`** — resolved once at attach; `containerOffset` refreshed only on window resize. Zero DOM reads (`getBoundingClientRect`, `getComputedStyle`) per scroll frame.
+- **DocumentFragment batching** — top-entering and bottom-entering blocks both collected into fragments before a single `insertBefore`. One DOM write per direction per frame.
+- **Single-fragment `renderAll`** — all initial blocks appended in one fragment write.
+- **Post-paint height measurement** — a `requestAnimationFrame` after the first paint measures all visible blocks so spacers are accurate from the start.
+- **Keystroke-safe subscriber** — state subscriber only calls `updateSpacers()` when block count changes, not on every character typed.
+
+#### Expected numbers
+
+| Blocks | Non-virtual `setJSON` | Virtual `setJSON` | Virtual scroll rAF |
+| ------ | --------------------- | ----------------- | ------------------ |
+| 500    | ~80–150 ms            | ~8–15 ms          | < 0.5 ms           |
+| 1000   | ~150–300 ms           | ~8–15 ms          | < 0.5 ms           |
+| 5000   | ~1–3 s (jank)         | ~8–15 ms          | < 1 ms             |
+
+Virtual `setJSON` is flat (always renders ~60 blocks). Non-virtual scales linearly with N.
+
+The demo toolbar has **Perf 500** and **Perf 1000** buttons that benchmark both modes side-by-side and log results to the console.
