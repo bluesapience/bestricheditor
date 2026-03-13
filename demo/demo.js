@@ -1,10 +1,8 @@
 import { createEditor } from '/dist/bre.esm.js';
 
-const container = document.getElementById('bre-demo');
-const editor = createEditor(container, { mode: 'BRE' });
+// ── BRE sample document ───────────────────────────────────────────────────────
 
-// Sample document with all block types
-editor.setJSON({
+const BRE_DOC = {
   id: 'demo-doc',
   version: 1,
   created: Date.now(),
@@ -120,9 +118,60 @@ editor.setJSON({
       },
     },
   ],
-});
+};
 
-// Add Export buttons to the demo card
+// ── BREM sample markdown ───────────────────────────────────────────────────────
+
+const BREM_SAMPLE = `# BREM — Markdown Mode
+
+Write **bold**, *italic*, or \`inline code\` with ease.
+
+## Lists
+
+- First bulleted item
+- Second bulleted item with **bold text**
+- Third item with _italic_
+
+1. First numbered item
+2. Second numbered item
+3. Third numbered item
+
+## Blockquote
+
+> The best way to predict the future is to invent it. — Alan Kay
+
+## Code
+
+\`\`\`javascript
+const editor = createEditor(container, { mode: 'BREM' });
+editor.setJSON(doc);
+console.log(editor.getHTML());
+\`\`\`
+
+---
+
+## Math
+
+Inline formula: $E = mc^2$ — Einstein's mass-energy equivalence.
+
+Block formula:
+
+$$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$
+
+## Links
+
+Visit [Best Rich Editor on GitHub](https://github.com) for more information.
+`;
+
+// ── Editor state ──────────────────────────────────────────────────────────────
+
+const container = document.getElementById('bre-demo');
+let editor = createEditor(container, { mode: 'BRE' });
+editor.setJSON(BRE_DOC);
+window.__bre = editor;
+
+// ── Export toolbar ────────────────────────────────────────────────────────────
+
 const card = document.querySelector('.demo-card');
 if (card) {
   const toolbar = document.createElement('div');
@@ -164,5 +213,40 @@ if (card) {
   card.appendChild(toolbar);
 }
 
-// Expose on window for manual testing in the browser console
-window.__bre = editor;
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+document.querySelectorAll('.demo-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const mode = tab.getAttribute('data-mode');
+
+    // Update active tab styling
+    document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('demo-tab--active'));
+    tab.classList.add('demo-tab--active');
+
+    // Destroy old editor
+    editor.destroy();
+
+    // Create new editor
+    editor = createEditor(container, { mode });
+    window.__bre = editor;
+
+    // Populate with sample content
+    if (mode === 'BREM') {
+      editor.setJSON({
+        id: 'brem-demo',
+        version: 1,
+        created: Date.now(),
+        updated: Date.now(),
+        blocks: [
+          {
+            id: 'md-1',
+            type: 'markdown',
+            data: { markdown: BREM_SAMPLE },
+          },
+        ],
+      });
+    } else {
+      editor.setJSON(BRE_DOC);
+    }
+  });
+});

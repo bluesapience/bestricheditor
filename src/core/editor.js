@@ -1,8 +1,9 @@
 /**
- * Best Rich Editor — Stage 1
- * Block engine + 7 essential blocks + slash menu + drag + columns
+ * Best Rich Editor — Stage 2
+ * Block engine + 7 essential blocks + slash menu + drag + columns + BREM
  */
 
+import { createBremEditor } from '../modes/brem.js';
 import { generateId } from '../utils/id.js';
 import { debounce } from '../utils/debounce.js';
 import {
@@ -111,6 +112,10 @@ function makeBlock(type, data) {
 export function createEditor(container, options = {}) {
   if (!(container instanceof Element)) {
     throw new Error('[bre] createEditor: container must be a DOM Element');
+  }
+
+  if (options.mode === 'BREM') {
+    return createBremEditor(container, options);
   }
 
   const opts = {

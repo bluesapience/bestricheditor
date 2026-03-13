@@ -7,27 +7,23 @@ import DOMPurify from 'dompurify';
 /**
  * Sanitize HTML using DOMPurify with a safe profile.
  * Allows common formatting tags but strips scripts and dangerous attributes.
+ *
+ * @param {string} html
+ * @param {{ allowKaTeX?: boolean }} [options]
  */
-export function sanitizeHTML(html) {
+export function sanitizeHTML(html, { allowKaTeX = false } = {}) {
   if (typeof html !== 'string') return '';
+  if (!allowKaTeX) {
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  }
   return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: [
-      'p', 'br', 'strong', 'em', 'u', 'code', 'pre', 'blockquote',
-      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-      'ul', 'ol', 'li',
-      'a', 'span', 'div',
-      'hr',
-      'table', 'thead', 'tbody', 'tr', 'th', 'td',
-      'img',
+    USE_PROFILES: { html: true, svg: true, mathMl: true },
+    ADD_ATTR: ['style', 'encoding'],
+    ADD_TAGS: [
+      'math', 'semantics', 'annotation', 'mrow', 'mi', 'mn', 'mo',
+      'mspace', 'mtext', 'mstyle', 'mfrac', 'msqrt', 'mover', 'munder',
+      'msup', 'msub', 'msubsup', 'msupsub', 'svg', 'path', 'line', 'g', 'use', 'defs',
     ],
-    ALLOWED_ATTR: [
-      'href', 'title', 'alt', 'src', 'class', 'id',
-      'data-bre-block-id', 'data-bre-field', 'data-bre-handle',
-      'data-bre-column',
-      'target', 'rel',
-    ],
-    ALLOW_DATA_ATTR: false,
-    FORCE_BODY: false,
   });
 }
 
