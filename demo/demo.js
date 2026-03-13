@@ -108,7 +108,7 @@ const BRE_DOC = {
     {
       id: 'b16',
       type: 'heading',
-      data: { level: 2, text: 'Columns' },
+      data: { level: 2, text: 'Columns 2' },
     },
     {
       id: 'b17',
@@ -117,16 +117,91 @@ const BRE_DOC = {
         columns: [
           [
             {
-              id: 'col-1-p1',
+              id: 'col2-1-p1',
               type: 'paragraph',
-              data: { text: 'Left column content. Each column is independently editable.' },
+              data: { text: 'Left column. Each column is independently editable.' },
             },
           ],
           [
             {
-              id: 'col-2-p1',
+              id: 'col2-2-p1',
               type: 'paragraph',
-              data: { text: 'Right column content. Columns stack on mobile screens.' },
+              data: { text: 'Right column. Stacks vertically on screens ≤ 600px.' },
+            },
+          ],
+        ],
+      },
+    },
+    {
+      id: 'b18',
+      type: 'heading',
+      data: { level: 2, text: 'Columns 3' },
+    },
+    {
+      id: 'b19',
+      type: 'columns',
+      data: {
+        columns: [
+          [
+            {
+              id: 'col3-1-p1',
+              type: 'paragraph',
+              data: { text: 'First column. Three columns side by side above 600px.' },
+            },
+          ],
+          [
+            {
+              id: 'col3-2-p1',
+              type: 'paragraph',
+              data: { text: 'Second column. Great for feature comparisons or triads.' },
+            },
+          ],
+          [
+            {
+              id: 'col3-3-p1',
+              type: 'paragraph',
+              data: { text: 'Third column. Stacks vertically on screens ≤ 600px.' },
+            },
+          ],
+        ],
+      },
+    },
+    {
+      id: 'b20',
+      type: 'heading',
+      data: { level: 2, text: 'Columns 4' },
+    },
+    {
+      id: 'b21',
+      type: 'columns',
+      data: {
+        columns: [
+          [
+            {
+              id: 'col4-1-p1',
+              type: 'paragraph',
+              data: { text: 'Column 1. Four columns above 1000px.' },
+            },
+          ],
+          [
+            {
+              id: 'col4-2-p1',
+              type: 'paragraph',
+              data: { text: 'Column 2. 2×2 grid between 601–1000px.' },
+            },
+          ],
+          [
+            {
+              id: 'col4-3-p1',
+              type: 'paragraph',
+              data: { text: 'Column 3. 2×2 grid between 601–1000px.' },
+            },
+          ],
+          [
+            {
+              id: 'col4-4-p1',
+              type: 'paragraph',
+              data: { text: 'Column 4. Single stack on screens ≤ 600px.' },
             },
           ],
         ],

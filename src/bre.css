@@ -272,14 +272,37 @@ code[data-bre-placeholder]:empty::before {
 
 .bre-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 16px;
   flex: 1;
   min-width: 0;
 }
 
-@media (max-width: 640px) {
-  .bre-columns {
+/* 2 columns — 2 wide on desktop, stack on mobile */
+.bre-columns[data-bre-cols="2"] {
+  grid-template-columns: 1fr 1fr;
+}
+
+/* 3 columns — 3 wide on desktop, stack on mobile */
+.bre-columns[data-bre-cols="3"] {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+/* 4 columns — 4 wide above 1000px, 2×2 between 601–1000px, stack on mobile */
+.bre-columns[data-bre-cols="4"] {
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+}
+
+@media (max-width: 1000px) {
+  .bre-columns[data-bre-cols="4"] {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .bre-columns,
+  .bre-columns[data-bre-cols="2"],
+  .bre-columns[data-bre-cols="3"],
+  .bre-columns[data-bre-cols="4"] {
     grid-template-columns: 1fr;
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Columns block plugin — 2-column layout.
+ * Columns block plugin — 2-, 3-, or 4-column layout.
  */
 import { blockRegistry } from '../core/blockRegistry.js';
 import { escapeHTML } from '../utils/dom.js';
@@ -54,6 +54,7 @@ blockRegistry.register('columns', {
     container.className = 'bre-columns';
 
     const cols = (block.data && block.data.columns) || [[], []];
+    container.setAttribute('data-bre-cols', String(cols.length));
     cols.forEach((colBlocks, colIndex) => {
       const colEl = document.createElement('div');
       colEl.className = 'bre-column';
@@ -74,14 +75,14 @@ blockRegistry.register('columns', {
     const colsHTML = cols.map(col =>
       `<div class="bre-column">\n${colToHTML(col)}\n</div>`
     ).join('\n');
-    return `<div class="bre-columns">\n${colsHTML}\n</div>`;
+    return `<div class="bre-columns" data-bre-cols="${cols.length}">\n${colsHTML}\n</div>`;
   },
 
   validate(block) {
     return (
       block.data &&
       Array.isArray(block.data.columns) &&
-      block.data.columns.length === 2
+      block.data.columns.length >= 2 && block.data.columns.length <= 4
     );
   },
 

@@ -102,9 +102,26 @@ const SLASH_ITEMS = [
   },
   {
     type: 'columns',
-    label: 'Columns',
+    label: 'Columns 2',
     icon: '⫾',
     description: 'Two-column layout',
+    colCount: 2,
+    defaultData: null, // handled specially
+  },
+  {
+    type: 'columns',
+    label: 'Columns 3',
+    icon: '⫶',
+    description: 'Three-column layout',
+    colCount: 3,
+    defaultData: null, // handled specially
+  },
+  {
+    type: 'columns',
+    label: 'Columns 4',
+    icon: '⊞',
+    description: 'Four-column layout (2×2 on medium screens)',
+    colCount: 4,
     defaultData: null, // handled specially
   },
   {
@@ -675,11 +692,9 @@ export function createEditor(container, options = {}) {
     // Build new block data
     let newData;
     if (item.type === 'columns') {
+      const colCount = item.colCount || 2;
       newData = {
-        columns: [
-          [makeBlock('paragraph', { text: '' })],
-          [makeBlock('paragraph', { text: '' })],
-        ],
+        columns: Array.from({ length: colCount }, () => [makeBlock('paragraph', { text: '' })]),
       };
     } else if (item.type === 'formula') {
       const latex = prompt('Enter LaTeX formula (e.g. E = mc^2):');
