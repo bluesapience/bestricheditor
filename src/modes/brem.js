@@ -118,6 +118,13 @@ export function createBremEditor(container, options = {}) {
     }
   });
 
+  // mousedown preventDefault stops the textarea from blurring before click fires,
+  // which would otherwise trigger showPreview() via the blur handler and flip
+  // isPreviewing to true before the click handler reads it.
+  toggleBtn.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+  });
+
   toggleBtn.addEventListener('click', () => {
     if (isPreviewing) {
       showEdit();

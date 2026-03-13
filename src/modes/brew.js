@@ -267,18 +267,17 @@ export function createBrewEditor(container, options = {}) {
   toolbar.setAttribute('role', 'toolbar');
   toolbar.setAttribute('aria-label', 'Formatting');
 
-  // Block type selector
+  // Block type selector (headings + paragraph only)
   const blockTypeSelect = document.createElement('select');
   blockTypeSelect.className = 'bre-brew-block-type';
   const BLOCK_TYPE_OPTIONS = [
-    { value: 'paragraph', label: 'Paragraph' },
-    { value: 'heading-1', label: 'Heading 1' },
-    { value: 'heading-2', label: 'Heading 2' },
-    { value: 'heading-3', label: 'Heading 3' },
-    { value: 'bulleted_list', label: 'Bulleted List' },
-    { value: 'numbered_list', label: 'Numbered List' },
-    { value: 'quote', label: 'Quote' },
-    { value: 'code', label: 'Code' },
+    { value: 'paragraph',  label: 'Paragraph' },
+    { value: 'heading-1',  label: 'Heading 1' },
+    { value: 'heading-2',  label: 'Heading 2' },
+    { value: 'heading-3',  label: 'Heading 3' },
+    { value: 'heading-4',  label: 'Heading 4' },
+    { value: 'heading-5',  label: 'Heading 5' },
+    { value: 'heading-6',  label: 'Heading 6' },
   ];
   for (const opt of BLOCK_TYPE_OPTIONS) {
     const option = document.createElement('option');
@@ -294,9 +293,9 @@ export function createBrewEditor(container, options = {}) {
   toolbar.appendChild(sep1);
 
   // Inline mark buttons
-  const btnBold = createToolbarBtn('B', 'bold', 'Bold (⌘B)');
-  const btnItalic = createToolbarBtn('I', 'italic', 'Italic (⌘I)');
-  const btnUnderline = createToolbarBtn('U', 'underline', 'Underline (⌘U)');
+  const btnBold      = createToolbarBtn('B',   'bold',      'Bold (⌘B)');
+  const btnItalic    = createToolbarBtn('I',   'italic',    'Italic (⌘I)');
+  const btnUnderline = createToolbarBtn('U',   'underline', 'Underline (⌘U)');
   toolbar.appendChild(btnBold);
   toolbar.appendChild(btnItalic);
   toolbar.appendChild(btnUnderline);
@@ -306,10 +305,25 @@ export function createBrewEditor(container, options = {}) {
   sep2.className = 'bre-brew-toolbar-sep';
   toolbar.appendChild(sep2);
 
+  // Block-type toggle buttons (bullet, numbered, quote, code)
+  const btnBullet   = createToolbarBtn('•',   'bulleted_list',  'Bulleted List');
+  const btnNumbered = createToolbarBtn('1.',  'numbered_list',  'Numbered List');
+  const btnQuote    = createToolbarBtn('"',   'quote',          'Quote');
+  const btnCode     = createToolbarBtn('</>',  'code',           'Code Block');
+  toolbar.appendChild(btnBullet);
+  toolbar.appendChild(btnNumbered);
+  toolbar.appendChild(btnQuote);
+  toolbar.appendChild(btnCode);
+
+  // Separator
+  const sep3 = document.createElement('div');
+  sep3.className = 'bre-brew-toolbar-sep';
+  toolbar.appendChild(sep3);
+
   // Insert buttons
   const btnDivider = createToolbarBtn('—', 'divider', 'Insert Divider');
-  const btnLink = createToolbarBtn('Link', 'link', 'Insert Link');
-  const btnFormula = createToolbarBtn('∑', 'formula', 'Insert Formula');
+  const btnLink    = createToolbarBtn('Link', 'link', 'Insert Link');
+  const btnFormula = createToolbarBtn('∑',  'formula', 'Insert Formula');
   toolbar.appendChild(btnDivider);
   toolbar.appendChild(btnLink);
   toolbar.appendChild(btnFormula);
@@ -400,15 +414,22 @@ export function createBrewEditor(container, options = {}) {
    * Update toolbar state (button active states, block type selector, disabled states).
    */
   function updateToolbarState() {
-    // Update block type selector
     const currentType = getCurrentBlockType();
+
+    // Block type selector — headings + paragraph
     if (BLOCK_TYPE_OPTIONS.some(o => o.value === currentType)) {
       blockTypeSelect.value = currentType;
     } else {
       blockTypeSelect.value = 'paragraph';
     }
 
-    // Update inline mark button active states
+    // Block-type toggle buttons active state
+    btnBullet.setAttribute('data-active',   currentType === 'bulleted_list'  ? 'true' : 'false');
+    btnNumbered.setAttribute('data-active', currentType === 'numbered_list'  ? 'true' : 'false');
+    btnQuote.setAttribute('data-active',    currentType === 'quote'          ? 'true' : 'false');
+    btnCode.setAttribute('data-active',     currentType === 'code'           ? 'true' : 'false');
+
+    // Inline mark button active + disabled states
     const hasInline = currentBlockHasInline();
     const markButtons = [btnBold, btnItalic, btnUnderline];
     for (const btn of markButtons) {
@@ -429,16 +450,15 @@ export function createBrewEditor(container, options = {}) {
 
   // ── Block type change ──────────────────────────────────────────────────────
 
-  blockTypeSelect.addEventListener('change', () => {
-    const value = blockTypeSelect.value;
+  /** Convert the block currently hosting the cursor to the given type value. */
+  function setCurrentBlockType(value) {
     surface.focus();
-
     const blockEl = getAnchorBlockEl();
     if (!blockEl) return;
 
     const currentText = blockEl.textContent || '';
-
     let newEl;
+
     if (value === 'paragraph') {
       newEl = document.createElement('p');
       newEl.setAttribute('data-bre-type', 'paragraph');
@@ -457,7 +477,6 @@ export function createBrewEditor(container, options = {}) {
       codeEl.textContent = currentText;
       newEl.appendChild(codeEl);
     } else if (value === 'bulleted_list') {
-      // Wrap in UL > LI
       const li = document.createElement('li');
       li.setAttribute('data-bre-type', 'bulleted_list');
       li.textContent = currentText;
@@ -473,29 +492,22 @@ export function createBrewEditor(container, options = {}) {
 
     if (!newEl) return;
 
-    // For non-list, non-code blocks, set text content
+    // Non-list, non-code blocks get plain text content
     if (!['code', 'bulleted_list', 'numbered_list'].includes(value)) {
       newEl.textContent = currentText;
     }
 
-    // Replace blockEl in DOM
-    // If blockEl is an LI, replace its parent UL/OL
-    let targetEl = blockEl;
-    if (blockEl.nodeName === 'LI') {
-      targetEl = blockEl.parentNode;
-    }
+    // If cursor is inside an LI, replace its parent UL/OL
+    let targetEl = blockEl.nodeName === 'LI' ? blockEl.parentNode : blockEl;
     if (targetEl && targetEl.parentNode === surface) {
       surface.replaceChild(newEl, targetEl);
     }
 
-    // Place cursor in new element
+    // Move cursor into the new element
     const sel = window.getSelection();
     const range = document.createRange();
-    // For ul/ol, focus into the li
     let focusTarget = newEl;
-    if (value === 'bulleted_list' || value === 'numbered_list') {
-      focusTarget = newEl.firstChild;
-    } else if (value === 'code') {
+    if (value === 'bulleted_list' || value === 'numbered_list' || value === 'code') {
       focusTarget = newEl.firstChild;
     }
     if (focusTarget) {
@@ -505,8 +517,26 @@ export function createBrewEditor(container, options = {}) {
       sel.addRange(range);
     }
     surface.focus();
+    updateToolbarState();
     debouncedSync();
+  }
+
+  blockTypeSelect.addEventListener('change', () => {
+    setCurrentBlockType(blockTypeSelect.value);
   });
+
+  // Block-type toggle buttons — mousedown+preventDefault preserves surface focus
+  for (const [btn, type] of [
+    [btnBullet,   'bulleted_list'],
+    [btnNumbered, 'numbered_list'],
+    [btnQuote,    'quote'],
+    [btnCode,     'code'],
+  ]) {
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      setCurrentBlockType(type);
+    });
+  }
 
   // ── Inline mark buttons ────────────────────────────────────────────────────
 
