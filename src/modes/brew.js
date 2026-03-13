@@ -58,6 +58,17 @@ function blockToSurfaceHTMLSnippet(block) {
     case 'divider': {
       return `<hr data-bre-type="divider" data-bre-id="${id}">`;
     }
+    case 'formula': {
+      const latex = (block.data && block.data.latex) || '';
+      try {
+        const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
+        const safe = sanitizeHTML(rendered, { allowKaTeX: true });
+        const escapedLatex = latex.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        return `<p data-bre-id="${id}"><span data-bre-type="formula" data-bre-latex="${escapedLatex}" contenteditable="false">${safe}</span></p>`;
+      } catch {
+        return `<p data-bre-id="${id}"><em>[Formula: ${escapeHTML(latex)}]</em></p>`;
+      }
+    }
     case 'columns': {
       return `<p data-bre-type="paragraph" data-bre-id="${id}"><em>[Columns block — edit in BRE mode]</em></p>`;
     }
@@ -118,7 +129,14 @@ function surfaceToBlocks(surface) {
 
     switch (tag) {
       case 'P': {
-        blocks.push({ id, type: 'paragraph', data: { text: node.textContent || '' } });
+        // Check if this paragraph contains only a formula span
+        const formulaSpan = node.querySelector('[data-bre-type="formula"]');
+        if (formulaSpan && node.textContent.trim() === formulaSpan.textContent.trim()) {
+          const latex = formulaSpan.getAttribute('data-bre-latex') || '';
+          blocks.push({ id, type: 'formula', data: { latex } });
+        } else {
+          blocks.push({ id, type: 'paragraph', data: { text: node.textContent || '' } });
+        }
         break;
       }
       case 'H1':
@@ -566,45 +584,218 @@ export function createBrewEditor(container, options = {}) {
 
   btnLink.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    surface.focus();
-    const url = prompt('Enter URL:');
-    if (!url) return;
-    const safe = sanitizeURL(url);
-    if (!safe) {
-      alert('Invalid or unsafe URL.');
-      return;
-    }
-    document.execCommand('createLink', false, safe);
-    // Add rel attribute to newly created link
     const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0) {
-      const range = sel.getRangeAt(0);
-      // Find the anchor element
-      let node = range.commonAncestorContainer;
-      if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
-      const anchor = node.closest ? node.closest('a') : null;
-      if (anchor) {
-        anchor.setAttribute('rel', 'noopener noreferrer');
-        anchor.setAttribute('target', '_blank');
+    const selectedText = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0).toString() : '';
+    // Save the range now, before focus moves to the dialog
+    const savedRange = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0).cloneRange() : null;
+    showLinkDialog({ text: selectedText, url: '' }, ({ text, url }) => {
+      // Restore saved selection before inserting
+      surface.focus();
+      if (savedRange) {
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(savedRange);
+      }
+      insertLink(text, url);
+      debouncedSync();
+    });
+  });
+
+  function insertLink(text, url) {
+    // Delete selected content first (avoids double-text when selection existed)
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      sel.deleteFromDocument();
+    }
+    // Insert the label text, then select it and apply createLink
+    document.execCommand('insertText', false, text);
+    // Re-select the just-inserted text so createLink wraps it
+    const sel2 = window.getSelection();
+    if (sel2 && sel2.rangeCount > 0) {
+      const range = sel2.getRangeAt(0);
+      const node = range.startContainer;
+      if (node.nodeType === Node.TEXT_NODE) {
+        const end = range.startOffset;
+        const start = Math.max(0, end - text.length);
+        const newRange = document.createRange();
+        newRange.setStart(node, start);
+        newRange.setEnd(node, end);
+        sel2.removeAllRanges();
+        sel2.addRange(newRange);
       }
     }
-    debouncedSync();
-  });
+    document.execCommand('createLink', false, url);
+    // Add target/rel to the newly created anchor
+    const sel3 = window.getSelection();
+    if (sel3 && sel3.rangeCount > 0) {
+      let node = sel3.getRangeAt(0).commonAncestorContainer;
+      if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+      const anchor = node.nodeName === 'A' ? node : (node.closest && node.closest('a'));
+      if (anchor) {
+        anchor.setAttribute('target', '_blank');
+        anchor.setAttribute('rel', 'noopener noreferrer');
+      }
+    }
+  }
+
+  /**
+   * Show a small inline link dialog near the toolbar.
+   * opts: { text, url, showRemove }
+   * onSave(({ text, url }) => void)
+   * onRemove(() => void) — optional
+   */
+  function showLinkDialog(opts, onSave, onRemove) {
+    // Remove any existing dialog
+    const existing = root.querySelector('.bre-brew-link-dialog');
+    if (existing) existing.remove();
+
+    const dialog = document.createElement('div');
+    dialog.className = 'bre-brew-link-dialog';
+
+    const textField = document.createElement('input');
+    textField.type = 'text';
+    textField.placeholder = 'Text';
+    textField.value = opts.text || '';
+    textField.className = 'bre-brew-link-input';
+
+    const urlField = document.createElement('input');
+    urlField.type = 'url';
+    urlField.placeholder = 'https://...';
+    urlField.value = opts.url || '';
+    urlField.className = 'bre-brew-link-input';
+
+    const actions = document.createElement('div');
+    actions.className = 'bre-brew-link-actions';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Save';
+    saveBtn.className = 'bre-brew-link-save';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'bre-brew-link-cancel';
+
+    // Layout: [Remove (edit only)] ··· [Cancel] [Save]
+    if (onRemove) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Remove';
+      removeBtn.className = 'bre-brew-link-remove';
+      removeBtn.addEventListener('click', () => {
+        dialog.remove();
+        onRemove();
+      });
+      actions.appendChild(removeBtn);
+    }
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+
+    dialog.appendChild(textField);
+    dialog.appendChild(urlField);
+    dialog.appendChild(actions);
+    root.appendChild(dialog);
+    textField.focus();
+
+    function close() { dialog.remove(); }
+
+    saveBtn.addEventListener('click', () => {
+      const text = textField.value.trim();
+      const url = urlField.value.trim();
+      if (!text || !url) return;
+      const safe = sanitizeURL(url);
+      if (!safe) { urlField.style.outline = '2px solid red'; return; }
+      close();
+      onSave({ text, url: safe });
+    });
+
+    cancelBtn.addEventListener('click', close);
+
+    // Close on Escape
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+      if (e.key === 'Enter') saveBtn.click();
+    });
+
+    // Close on outside click
+    setTimeout(() => {
+      document.addEventListener('mousedown', function outsideClick(e) {
+        if (!dialog.contains(e.target)) {
+          close();
+          document.removeEventListener('mousedown', outsideClick);
+        }
+      });
+    }, 0);
+  }
 
   btnFormula.addEventListener('mousedown', (e) => {
     e.preventDefault();
     surface.focus();
     const latex = prompt('Enter LaTeX formula:');
     if (!latex) return;
+    insertFormula(latex);
+    debouncedSync();
+  });
+
+  function insertFormula(latex) {
     try {
-      const rendered = katex.renderToString(latex, {
-        throwOnError: false,
-        output: 'html',
-      });
+      const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
       const safe = sanitizeHTML(rendered, { allowKaTeX: true });
-      document.execCommand('insertHTML', false, safe);
+      const escapedLatex = latex.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<span data-bre-type="formula" data-bre-latex="${escapedLatex}" contenteditable="false">${safe}</span>&nbsp;`
+      );
     } catch (err) {
       console.warn('[bre] BREW formula render error:', err);
+    }
+  }
+
+  // ── Formula click-to-edit ──────────────────────────────────────────────────
+
+  surface.addEventListener('click', (e) => {
+    // Click-to-edit links
+    const anchorEl = e.target.closest('a');
+    if (anchorEl && surface.contains(anchorEl)) {
+      e.preventDefault();
+      showLinkDialog(
+        { text: anchorEl.textContent || '', url: anchorEl.getAttribute('href') || '' },
+        ({ text, url }) => {
+          anchorEl.textContent = text;
+          anchorEl.setAttribute('href', url);
+          debouncedSync();
+        },
+        () => {
+          anchorEl.replaceWith(document.createTextNode(anchorEl.textContent || ''));
+          debouncedSync();
+        }
+      );
+      return;
+    }
+
+    const formulaEl = e.target.closest('[data-bre-type="formula"]');
+    if (!formulaEl) return;
+    const currentLatex = formulaEl.getAttribute('data-bre-latex') || '';
+    const latex = prompt('Edit LaTeX formula:', currentLatex);
+    if (latex === null) return; // cancelled
+    if (!latex.trim()) {
+      formulaEl.remove();
+      debouncedSync();
+      return;
+    }
+    try {
+      const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
+      const safe = sanitizeHTML(rendered, { allowKaTeX: true });
+      const escapedLatex = latex.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      formulaEl.setAttribute('data-bre-latex', latex);
+      formulaEl.innerHTML = safe;
+      // Re-sanitize by reassigning escaped attribute
+      formulaEl.setAttribute('data-bre-latex', escapedLatex);
+    } catch (err) {
+      console.warn('[bre] BREW formula edit error:', err);
     }
     debouncedSync();
   });
