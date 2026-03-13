@@ -83,7 +83,7 @@ export function createBremEditor(container, options = {}) {
   }
 
   function renderPreview() {
-    preview.innerHTML = sanitizeHTML(parseMarkdown(markdown), { allowKaTeX: true });
+    preview.innerHTML = sanitizeHTML(parseMarkdown(markdown), { allowKaTeX: true, allowMedia: true });
   }
 
   function showPreview() {
@@ -159,7 +159,7 @@ export function createBremEditor(container, options = {}) {
   }
 
   function getHTML() {
-    return sanitizeHTML(parseMarkdown(markdown), { allowKaTeX: true });
+    return sanitizeHTML(parseMarkdown(markdown), { allowKaTeX: true, allowMedia: true });
   }
 
   function destroy() {

@@ -394,6 +394,22 @@ $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$
 ## Links
 
 Visit [Best Rich Editor on GitHub](https://github.com) for more information.
+
+## Table
+
+| Name  | Role     | Status   |
+| ----- | -------- | -------- |
+| Alice | Engineer | Active   |
+| Bob   | Designer | Active   |
+| Carol | Manager  | On leave |
+
+## Image
+
+![Calm lake at sunrise](https://images.unsplash.com/photo-1506748686214-e9df14d4d9d0?w=800)
+
+## Video
+
+![Rick Astley — Never Gonna Give You Up](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
 `;
 
 // ── Editor state ──────────────────────────────────────────────────────────────

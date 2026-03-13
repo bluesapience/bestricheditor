@@ -15,6 +15,52 @@ function escapeHTML(str) {
     .replace(/"/g, '&quot;');
 }
 
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus']);
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'avi', 'mkv']);
+
+/** Extract embed URL for YouTube / Vimeo, or null for other URLs. */
+function getEmbedUrl(src) {
+  try {
+    const url = new URL(src);
+    const host = url.hostname.replace(/^www\./, '');
+    if (host === 'youtube.com' || host === 'youtu.be') {
+      const id = host === 'youtu.be'
+        ? url.pathname.slice(1).split('?')[0]
+        : url.searchParams.get('v');
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+    }
+    if (host === 'vimeo.com') {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      return id ? `https://player.vimeo.com/video/${encodeURIComponent(id)}` : null;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Render a `![alt](url)` token as the right media element.
+ * YouTube/Vimeo → iframe embed; audio/video extensions → <audio>/<video>;
+ * everything else → <img>.
+ */
+function renderMedia(alt, safeUrl) {
+  const cap = alt ? `<figcaption class="bre-media-caption">${escapeHTML(alt)}</figcaption>` : '';
+
+  const embedUrl = getEmbedUrl(safeUrl);
+  if (embedUrl) {
+    return `<figure class="bre-video-block"><iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>${cap}</figure>`;
+  }
+
+  const ext = safeUrl.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+  if (AUDIO_EXTS.has(ext)) {
+    return `<figure class="bre-audio-block"><audio class="bre-audio" controls src="${escapeHTML(safeUrl)}"></audio>${cap}</figure>`;
+  }
+  if (VIDEO_EXTS.has(ext)) {
+    return `<figure class="bre-video-block"><video class="bre-video" controls src="${escapeHTML(safeUrl)}"></video>${cap}</figure>`;
+  }
+  // Default: image
+  return `<figure class="bre-image-block"><img class="bre-image" src="${escapeHTML(safeUrl)}" alt="${escapeHTML(alt)}" loading="lazy">${cap}</figure>`;
+}
+
 // ── Inline Processing ─────────────────────────────────────────────────────────
 
 /**
@@ -114,6 +160,22 @@ function processInline(text) {
         out += `<em>${processInline(inner)}</em>`;
         i = end + 1;
         continue;
+      }
+    }
+
+    // ── Image / Audio / Video: ![alt](url)
+    if (text[i] === '!' && text[i + 1] === '[') {
+      const closeBracket = text.indexOf(']', i + 2);
+      if (closeBracket !== -1 && text[closeBracket + 1] === '(') {
+        const closeParen = text.indexOf(')', closeBracket + 2);
+        if (closeParen !== -1) {
+          const alt = text.slice(i + 2, closeBracket);
+          const rawUrl = text.slice(closeBracket + 2, closeParen);
+          const safeUrl = sanitizeURL(rawUrl);
+          out += safeUrl ? renderMedia(alt, safeUrl) : escapeHTML(alt);
+          i = closeParen + 1;
+          continue;
+        }
       }
     }
 
@@ -249,6 +311,26 @@ export function parseMarkdown(text) {
       continue;
     }
 
+    // ── Pipe table: | header | ... / | --- | ... / | cell | ...
+    // Lookahead: only commit if the next line is a separator row (contains dashes).
+    if (line.startsWith('|') && i + 1 < lines.length &&
+        lines[i + 1].startsWith('|') && /[-]/.test(lines[i + 1])) {
+      const tableLines = [];
+      while (i < lines.length && lines[i].startsWith('|')) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      const parseRow = row => row.split('|').slice(1, -1).map(c => c.trim());
+      const [headerRow, /* sep */, ...bodyRows] = tableLines;
+      const headers = parseRow(headerRow);
+      const thead = `<thead><tr>${headers.map(h => `<th>${processInline(h)}</th>`).join('')}</tr></thead>`;
+      const tbody = bodyRows.length > 0
+        ? `<tbody>${bodyRows.map(r => `<tr>${parseRow(r).map(c => `<td>${processInline(c)}</td>`).join('')}</tr>`).join('\n')}</tbody>`
+        : '';
+      out.push(`<div class="bre-table-wrapper"><table class="bre-table">\n${thead}\n${tbody}\n</table></div>`);
+      continue;
+    }
+
     // ── Empty line: skip
     if (line.trim() === '') {
       i++;
@@ -265,7 +347,8 @@ export function parseMarkdown(text) {
       !/^#{1,6}\s/.test(lines[i]) &&
       !(lines[i].startsWith('> ') || lines[i] === '>') &&
       !/^[-*]\s/.test(lines[i]) &&
-      !/^\d+\.\s/.test(lines[i])
+      !/^\d+\.\s/.test(lines[i]) &&
+      !lines[i].startsWith('|')
     ) {
       paraLines.push(lines[i]);
       i++;

@@ -666,6 +666,14 @@ code[data-bre-placeholder]:empty::before {
   color: var(--bre-color-accent);
   text-decoration: underline;
 }
+.bre-brem-preview .bre-image-block,
+.bre-brem-preview .bre-audio-block,
+.bre-brem-preview .bre-video-block {
+  margin: 0.75em 0;
+}
+.bre-brem-preview .bre-table-wrapper {
+  margin: 0.75em 0;
+}
 .bre-katex-block {
   display: block;
   text-align: center;
