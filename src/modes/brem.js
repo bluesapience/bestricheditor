@@ -29,7 +29,7 @@ export function createBremEditor(container, options = {}) {
 
   // ── Internal state ────────────────────────────────────────────────────────
   let markdown = '';
-  let isPreviewing = false;
+  let isPreviewing = true;
 
   // ── DOM structure ─────────────────────────────────────────────────────────
   const root = document.createElement('div');
@@ -39,15 +39,15 @@ export function createBremEditor(container, options = {}) {
   const textarea = document.createElement('textarea');
   textarea.className = 'bre-brem-textarea';
   textarea.placeholder = 'Write markdown here… (blur or click Preview to render)';
+  textarea.hidden = true;
 
   const preview = document.createElement('div');
   preview.className = 'bre-brem-preview';
-  preview.hidden = true;
 
   const toggleBtn = document.createElement('button');
   toggleBtn.className = 'bre-brem-toggle';
   toggleBtn.type = 'button';
-  toggleBtn.textContent = 'Preview';
+  toggleBtn.textContent = 'Edit';
 
   root.appendChild(textarea);
   root.appendChild(preview);
