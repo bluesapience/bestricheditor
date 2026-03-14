@@ -1,0 +1,54 @@
+{
+  "name": "bestricheditor",
+  "version": "0.1.1",
+  "description": "One library, every editing style — block editor (BRE), Markdown (BREM), and WYSIWYG (BREW). Native JS, no frameworks.",
+  "type": "module",
+  "main": "dist/bre.umd.js",
+  "module": "dist/bre.esm.js",
+  "style": "dist/bre.css",
+  "exports": {
+    ".": {
+      "import": "./dist/bre.esm.js",
+      "require": "./dist/bre.umd.js"
+    },
+    "./dist/bre.css": "./dist/bre.css"
+  },
+  "files": [
+    "dist/bre.esm.js",
+    "dist/bre.umd.js",
+    "dist/bre.css",
+    "README.md"
+  ],
+  "keywords": [
+    "rich-text-editor",
+    "wysiwyg",
+    "markdown",
+    "block-editor",
+    "notion",
+    "contenteditable",
+    "katex",
+    "dompurify",
+    "editor",
+    "vanilla-js"
+  ],
+  "author": "BlueSapience",
+  "license": "MIT",
+  "scripts": {
+    "dev": "rollup -c --watch",
+    "build": "BUILD=production rollup -c",
+    "preview": "serve . -p 4000",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.0",
+    "katex": "^0.16.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "rollup": "^4.0.0",
+    "rollup-plugin-livereload": "^2.0.0",
+    "rollup-plugin-postcss": "^4.0.2",
+    "rollup-plugin-serve": "^2.0.0",
+    "serve": "^14.0.0"
+  }
+}

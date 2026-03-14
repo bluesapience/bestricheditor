@@ -1,0 +1,54 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.demo-header {
+  background: #111827;
+  color: #fff;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.demo-header__logo {
+  font-family: monospace;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.demo-header__title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* ── Main layout ─────────────────────────────────────────────────────────── */
+
+.demo-main {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 0 16px;
+}
+
+.demo-card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  min-height: 500px;
+  overflow: hidden;
+}

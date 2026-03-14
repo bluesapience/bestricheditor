@@ -1,0 +1,14 @@
+# Source maps (dev-only)
+dist/*.map
+
+# Source and dev files
+src/
+demo/
+assets/
+node_modules/
+
+# Config and docs
+rollup.config.js
+CLAUDE.md
+ABOUT.md
+TODO.md
