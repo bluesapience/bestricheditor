@@ -10,6 +10,7 @@ import { generateId } from '../utils/id.js';
 import { debounce } from '../utils/debounce.js';
 import {
   closestBlock,
+  escapeHTML,
   getCursorOffset,
   setCursorOffset,
   isCursorAtStart,
@@ -48,49 +49,49 @@ const SLASH_ITEMS = [
     label: 'Text',
     icon: 'T',
     description: 'Start writing with plain text',
-    defaultData: { text: '' },
+    defaultData: { html: '' },
   },
   {
     type: 'heading',
     label: 'Heading 1',
     icon: 'H1',
     description: 'Large section heading',
-    defaultData: { level: 1, text: '' },
+    defaultData: { level: 1, html: '' },
   },
   {
     type: 'heading',
     label: 'Heading 2',
     icon: 'H2',
     description: 'Medium section heading',
-    defaultData: { level: 2, text: '' },
+    defaultData: { level: 2, html: '' },
   },
   {
     type: 'heading',
     label: 'Heading 3',
     icon: 'H3',
     description: 'Small section heading',
-    defaultData: { level: 3, text: '' },
+    defaultData: { level: 3, html: '' },
   },
   {
     type: 'bulleted_list',
     label: 'Bulleted List',
     icon: '•',
     description: 'Create a simple bulleted list',
-    defaultData: { text: '' },
+    defaultData: { html: '' },
   },
   {
     type: 'numbered_list',
     label: 'Numbered List',
     icon: '1.',
     description: 'Create a numbered list',
-    defaultData: { text: '' },
+    defaultData: { html: '' },
   },
   {
     type: 'quote',
     label: 'Quote',
     icon: '"',
     description: 'Capture a quote or callout',
-    defaultData: { text: '' },
+    defaultData: { html: '' },
   },
   {
     type: 'divider',
@@ -212,7 +213,7 @@ export function createEditor(container, options = {}) {
     : createRenderer(root);
 
   // Initialize with one empty paragraph if no content
-  const initBlock = makeBlock('paragraph', { text: '' });
+  const initBlock = makeBlock('paragraph', { html: '' });
   state.addBlock(initBlock);
   renderer.renderAll(state.getBlocks());
 
@@ -411,7 +412,9 @@ export function createEditor(container, options = {}) {
       fieldEl.innerHTML = '';
     }
 
-    const text = fieldEl.textContent;
+    const textContent = fieldEl.textContent;
+    const isHtmlField = fieldName === 'html';
+    const fieldValue = isHtmlField ? sanitizeHTML(fieldEl.innerHTML) : textContent;
 
     // Sync to state
     const { block, context } = state.findBlockAnywhere(blockId);
@@ -419,7 +422,7 @@ export function createEditor(container, options = {}) {
 
     if (context === null) {
       // Top-level block
-      state.updateBlockData(blockId, { [fieldName]: text });
+      state.updateBlockData(blockId, { [fieldName]: fieldValue });
     } else {
       // Column sub-block — update its data within the column
       const { columnsBlockId, colIndex } = context;
@@ -427,20 +430,20 @@ export function createEditor(container, options = {}) {
       if (!columnsBlock) return;
       const newColBlocks = columnsBlock.data.columns[colIndex].map(b => {
         if (b.id !== blockId) return b;
-        return { ...b, data: { ...b.data, [fieldName]: text } };
+        return { ...b, data: { ...b.data, [fieldName]: fieldValue } };
       });
       state.updateColumnBlock(columnsBlockId, colIndex, newColBlocks);
     }
 
-    // Slash menu
-    if (fieldName === 'text') {
-      if (text === '/') {
+    // Slash menu — use textContent for detection regardless of field type
+    if (fieldName === 'text' || fieldName === 'html') {
+      if (textContent === '/') {
         slashBlockId = blockId;
         slashFieldEl = fieldEl;
         const rect = fieldEl.getBoundingClientRect();
         slashMenu.show(rect, SLASH_ITEMS);
-      } else if (text.startsWith('/') && slashBlockId === blockId) {
-        slashMenu.filter(text.slice(1));
+      } else if (textContent.startsWith('/') && slashBlockId === blockId) {
+        slashMenu.filter(textContent.slice(1));
       } else {
         if (slashMenu.isVisible()) slashMenu.hide();
         slashBlockId = null;
@@ -578,10 +581,26 @@ export function createEditor(container, options = {}) {
   // ── Enter ──────────────────────────────────────────────────────────────────
 
   function handleEnter(block, fieldEl, context) {
-    const cursorOffset = getCursorOffset(fieldEl);
-    const fullText = fieldEl.textContent;
-    const beforeText = fullText.slice(0, cursorOffset);
-    const afterText = fullText.slice(cursorOffset);
+    // Split field content at cursor using Range API to preserve inline HTML
+    const sel = window.getSelection();
+    let beforeHTML = '';
+    let afterHTML = '';
+
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      range.collapse(true);
+      // Select from cursor to end of fieldEl, then extract it
+      const afterRange = document.createRange();
+      afterRange.selectNodeContents(fieldEl);
+      afterRange.setStart(range.startContainer, range.startOffset);
+      const afterFrag = afterRange.extractContents();
+      beforeHTML = sanitizeHTML(fieldEl.innerHTML);
+      const tmp = document.createElement('div');
+      tmp.appendChild(afterFrag);
+      afterHTML = sanitizeHTML(tmp.innerHTML);
+    } else {
+      beforeHTML = sanitizeHTML(fieldEl.innerHTML);
+    }
 
     if (context !== null) {
       // Sub-block inside a column
@@ -589,9 +608,8 @@ export function createEditor(container, options = {}) {
       const columnsBlock = state.getBlock(columnsBlockId);
       if (!columnsBlock) return;
 
-      // Update current block text
-      const updatedBlock = { ...block, data: { ...block.data, text: beforeText } };
-      const newPara = makeBlock('paragraph', { text: afterText });
+      const updatedBlock = { ...block, data: { ...block.data, html: beforeHTML } };
+      const newPara = makeBlock('paragraph', { html: afterHTML });
 
       const newColBlocks = [...columnsBlock.data.columns[colIndex]];
       newColBlocks[indexInCol] = updatedBlock;
@@ -603,21 +621,13 @@ export function createEditor(container, options = {}) {
       const updatedColumnsBlock = state.getBlock(columnsBlockId);
       renderer.updateBlock(updatedColumnsBlock);
 
-      // Focus the new block
       focusBlock(newPara.id, 0);
     } else {
-      // Top-level block
-      // Update current block
-      state.updateBlockData(block.id, { text: beforeText });
-      // Create new paragraph
-      const newPara = makeBlock('paragraph', { text: afterText });
+      // Top-level block — fieldEl already has beforeHTML (extractContents modified it)
+      state.updateBlockData(block.id, { html: beforeHTML });
+      const newPara = makeBlock('paragraph', { html: afterHTML });
       state.addBlock(newPara, block.id);
       renderer.insertBlock(newPara, block.id);
-
-      // Update fieldEl text immediately (avoid re-render flicker)
-      if (fieldEl.textContent !== beforeText) {
-        fieldEl.textContent = beforeText;
-      }
 
       focusBlock(newPara.id, 0);
     }
@@ -642,7 +652,8 @@ export function createEditor(container, options = {}) {
 
       // Convert non-paragraph to paragraph if not empty
       if (block.type !== 'paragraph' && text.length > 0) {
-        const updatedBlock = { ...block, type: 'paragraph', data: { text: block.data.text || '' } };
+        const html = block.data.html ?? escapeHTML(block.data.text ?? '');
+        const updatedBlock = { ...block, type: 'paragraph', data: { html } };
         const newColBlocks = colBlocks.map((b, i) => i === indexInCol ? updatedBlock : b);
         state.updateColumnBlock(columnsBlockId, colIndex, newColBlocks);
         const updatedCols = state.getBlock(columnsBlockId);
@@ -651,14 +662,19 @@ export function createEditor(container, options = {}) {
         return;
       }
 
-      // Merge with previous if prev has text field
+      // Merge with previous if prev supports inline content
       const prevPlugin = blockRegistry.get(prevBlock.type);
-      const prevHasText = prevPlugin && prevBlock.data && typeof prevBlock.data.text === 'string';
+      const prevHasInline = prevPlugin && prevBlock.data &&
+        (typeof prevBlock.data.html === 'string' || typeof prevBlock.data.text === 'string');
 
-      if (prevHasText) {
-        const prevText = prevBlock.data.text;
-        const mergedOffset = prevText.length;
-        const updatedPrev = { ...prevBlock, data: { ...prevBlock.data, text: prevText + text } };
+      if (prevHasInline) {
+        const prevHTML = prevBlock.data.html ?? escapeHTML(prevBlock.data.text ?? '');
+        const currentHTML = block.data.html ?? escapeHTML(block.data.text ?? '');
+        const mergedHTML = prevHTML + currentHTML;
+        const tmpEl = document.createElement('div');
+        tmpEl.innerHTML = prevHTML;
+        const mergedOffset = tmpEl.textContent.length;
+        const updatedPrev = { ...prevBlock, data: { ...prevBlock.data, html: mergedHTML } };
         const newColBlocks = colBlocks
           .map((b, i) => i === indexInCol - 1 ? updatedPrev : b)
           .filter((_, i) => i !== indexInCol);
@@ -687,7 +703,8 @@ export function createEditor(container, options = {}) {
       if (block.type === 'paragraph' && text === '') return;
       if (block.type !== 'paragraph') {
         // Convert to paragraph
-        const newBlock = makeBlock('paragraph', { text: block.data.text || '' });
+        const html = block.data.html ?? escapeHTML(block.data.text ?? '');
+        const newBlock = makeBlock('paragraph', { html });
         newBlock.id = block.id; // keep same id
         state.replaceBlock(block.id, newBlock);
         renderer.updateBlock(state.getBlock(block.id));
@@ -698,7 +715,8 @@ export function createEditor(container, options = {}) {
 
     // Non-paragraph type with text: convert to paragraph
     if (block.type !== 'paragraph' && text.length > 0) {
-      const newBlock = { ...block, type: 'paragraph', data: { text: block.data.text || '' } };
+      const html = block.data.html ?? escapeHTML(block.data.text ?? '');
+      const newBlock = { ...block, type: 'paragraph', data: { html } };
       state.replaceBlock(block.id, newBlock);
       renderer.updateBlock(state.getBlock(block.id));
       focusBlock(newBlock.id, 0);
@@ -718,16 +736,21 @@ export function createEditor(container, options = {}) {
     }
 
     const prevPlugin = blockRegistry.get(prevBlock.type);
-    const prevHasText = prevPlugin && prevBlock.data && typeof prevBlock.data.text === 'string';
+    const prevHasInline = prevPlugin && prevBlock.data &&
+      (typeof prevBlock.data.html === 'string' || typeof prevBlock.data.text === 'string');
 
-    if (prevHasText) {
-      const prevText = prevBlock.data.text;
-      const mergedOffset = prevText.length;
-      state.updateBlockData(prevBlock.id, { text: prevText + text });
+    if (prevHasInline) {
+      const prevHTML = prevBlock.data.html ?? escapeHTML(prevBlock.data.text ?? '');
+      const currentHTML = block.data.html ?? escapeHTML(block.data.text ?? '');
+      const mergedHTML = prevHTML + currentHTML;
+      const tmpEl = document.createElement('div');
+      tmpEl.innerHTML = prevHTML;
+      const mergedOffset = tmpEl.textContent.length;
+      state.updateBlockData(prevBlock.id, { html: mergedHTML });
       state.removeBlock(block.id);
       renderer.removeBlock(block.id);
 
-      // Update prev block in DOM to show merged text
+      // Update prev block in DOM to show merged content
       const updatedPrev = state.getBlock(prevBlock.id);
       if (updatedPrev) {
         renderer.updateBlock(updatedPrev);
@@ -890,7 +913,9 @@ export function createEditor(container, options = {}) {
       }
 
       // Remove current block if it was empty
-      if (!block.data.text || block.data.text.trim() === '') {
+      const tmpDiv = document.createElement('div');
+      tmpDiv.innerHTML = block.data.html ?? escapeHTML(block.data.text ?? '');
+      if (!tmpDiv.textContent.trim()) {
         state.removeBlock(block.id);
         renderer.removeBlock(block.id);
       }
@@ -920,7 +945,7 @@ export function createEditor(container, options = {}) {
     if (item.type === 'columns') {
       const colCount = item.colCount || 2;
       newData = {
-        columns: Array.from({ length: colCount }, () => [makeBlock('paragraph', { text: '' })]),
+        columns: Array.from({ length: colCount }, () => [makeBlock('paragraph', { html: '' })]),
       };
     } else if (item.type === 'formula') {
       const latex = prompt('Enter LaTeX formula (e.g. E = mc^2):');
@@ -1045,6 +1070,18 @@ export function createEditor(container, options = {}) {
     return sanitizeHTML(raw);
   }
 
+  function setHTML(html) {
+    if (typeof html !== 'string') return;
+    const blocks = htmlToBlocks(html);
+    setJSON({
+      id: generateId(),
+      version: 1,
+      created: Date.now(),
+      updated: Date.now(),
+      blocks: blocks.length > 0 ? blocks : [makeBlock('paragraph', { html: '' })],
+    });
+  }
+
   function destroy() {
     root.removeEventListener('input', handleInput);
     root.removeEventListener('keydown', handleKeydown);
@@ -1055,7 +1092,7 @@ export function createEditor(container, options = {}) {
     root.remove();
   }
 
-  return { getJSON, setJSON, getHTML, destroy };
+  return { getJSON, setJSON, getHTML, setHTML, destroy };
 }
 
 export { transforms };

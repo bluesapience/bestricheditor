@@ -4,7 +4,7 @@
  */
 import DOMPurify from 'dompurify';
 import { generateId } from './id.js';
-import { sanitizeURL } from './sanitize.js';
+import { sanitizeHTML, sanitizeURL } from './sanitize.js';
 
 /**
  * Convert an HTML string to an array of BRE blocks.
@@ -51,9 +51,8 @@ function processNode(node, blocks) {
   switch (tag) {
     case 'P':
     case 'DIV': {
-      const text = node.textContent.trim();
-      if (text) {
-        blocks.push(makeBlock('paragraph', { text }));
+      if (node.textContent.trim()) {
+        blocks.push(makeBlock('paragraph', { html: sanitizeHTML(node.innerHTML) }));
       }
       break;
     }
@@ -65,17 +64,15 @@ function processNode(node, blocks) {
     case 'H5':
     case 'H6': {
       const level = parseInt(tag[1], 10);
-      const text = node.textContent.trim();
-      if (text) {
-        blocks.push(makeBlock('heading', { level, text }));
+      if (node.textContent.trim()) {
+        blocks.push(makeBlock('heading', { level, html: sanitizeHTML(node.innerHTML) }));
       }
       break;
     }
 
     case 'BLOCKQUOTE': {
-      const text = node.textContent.trim();
-      if (text) {
-        blocks.push(makeBlock('quote', { text }));
+      if (node.textContent.trim()) {
+        blocks.push(makeBlock('quote', { html: sanitizeHTML(node.innerHTML) }));
       }
       break;
     }
@@ -90,9 +87,8 @@ function processNode(node, blocks) {
     case 'UL': {
       for (const child of node.childNodes) {
         if (child.nodeType === Node.ELEMENT_NODE && child.tagName.toUpperCase() === 'LI') {
-          const text = child.textContent.trim();
-          if (text) {
-            blocks.push(makeBlock('bulleted_list', { text }));
+          if (child.textContent.trim()) {
+            blocks.push(makeBlock('bulleted_list', { html: sanitizeHTML(child.innerHTML) }));
           }
         }
       }
@@ -102,9 +98,8 @@ function processNode(node, blocks) {
     case 'OL': {
       for (const child of node.childNodes) {
         if (child.nodeType === Node.ELEMENT_NODE && child.tagName.toUpperCase() === 'LI') {
-          const text = child.textContent.trim();
-          if (text) {
-            blocks.push(makeBlock('numbered_list', { text }));
+          if (child.textContent.trim()) {
+            blocks.push(makeBlock('numbered_list', { html: sanitizeHTML(child.innerHTML) }));
           }
         }
       }
