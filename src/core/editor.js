@@ -424,10 +424,15 @@ export function createEditor(container, options = {}) {
 
     const textContent = fieldEl.textContent;
     const isHtmlField = fieldName === 'html';
-    // Keyboard input in contenteditable is browser-controlled and cannot inject
-    // script tags. Paste is sanitized separately. Block renders and getHTML()
-    // both sanitize on the way out, so skipping DOMPurify here is safe.
-    const fieldValue = isHtmlField ? fieldEl.innerHTML : textContent;
+    // Fast path: if the field contains no HTML tags (pure text typing), store
+    // raw innerHTML directly — no DOMPurify cost on every keystroke. When
+    // inline markup is present (<b>, <em>, links, etc.) sanitize as normal so
+    // state never holds unsafe HTML that a third-party renderer could misuse.
+    // Paste is always sanitized separately in handlePaste.
+    const rawHTML = fieldEl.innerHTML;
+    const fieldValue = isHtmlField
+      ? (rawHTML.includes('<') ? sanitizeHTML(rawHTML) : rawHTML)
+      : textContent;
 
     // Sync to state
     const { block, context } = state.findBlockAnywhere(blockId);
