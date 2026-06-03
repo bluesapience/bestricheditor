@@ -3,12 +3,13 @@
  * contenteditable surface with formatting toolbar.
  */
 
-import katex from 'katex';
+import { katexReady, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { generateId } from '../utils/id.js';
 import { debounce } from '../utils/debounce.js';
 import { escapeHTML } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 
 // Ensure all block plugins are registered (same as editor.js)
 import '../blocks/paragraph.js';
@@ -67,17 +68,23 @@ function blockToSurfaceHTMLSnippet(block, embedAllowlist) {
   const id = block.id || generateId();
   switch (block.type) {
     case 'paragraph': {
-      const text = escapeHTML((block.data && block.data.text) || '');
-      return `<p data-bre-type="paragraph" data-bre-id="${id}">${text || '<br>'}</p>`;
+      const html = (block.data && block.data.html != null)
+        ? sanitizeHTML(block.data.html)
+        : escapeHTML((block.data && block.data.text) || '');
+      return `<p data-bre-type="paragraph" data-bre-id="${id}">${html || '<br>'}</p>`;
     }
     case 'heading': {
       const level = (block.data && block.data.level) || 1;
-      const text = escapeHTML((block.data && block.data.text) || '');
-      return `<h${level} data-bre-type="heading" data-bre-level="${level}" data-bre-id="${id}">${text || '<br>'}</h${level}>`;
+      const html = (block.data && block.data.html != null)
+        ? sanitizeHTML(block.data.html)
+        : escapeHTML((block.data && block.data.text) || '');
+      return `<h${level} data-bre-type="heading" data-bre-level="${level}" data-bre-id="${id}">${html || '<br>'}</h${level}>`;
     }
     case 'quote': {
-      const text = escapeHTML((block.data && block.data.text) || '');
-      return `<blockquote data-bre-type="quote" data-bre-id="${id}">${text || '<br>'}</blockquote>`;
+      const html = (block.data && block.data.html != null)
+        ? sanitizeHTML(block.data.html)
+        : escapeHTML((block.data && block.data.text) || '');
+      return `<blockquote data-bre-type="quote" data-bre-id="${id}">${html || '<br>'}</blockquote>`;
     }
     case 'code': {
       const lang = escapeHTML((block.data && block.data.language) || '');
@@ -85,18 +92,24 @@ function blockToSurfaceHTMLSnippet(block, embedAllowlist) {
       return `<pre data-bre-type="code" data-bre-lang="${lang}" data-bre-id="${id}"><code>${code || '<br>'}</code></pre>`;
     }
     case 'bulleted_list': {
-      const text = escapeHTML((block.data && block.data.text) || '');
-      return `<li data-bre-type="bulleted_list" data-bre-id="${id}">${text || '<br>'}</li>`;
+      const html = (block.data && block.data.html != null)
+        ? sanitizeHTML(block.data.html)
+        : escapeHTML((block.data && block.data.text) || '');
+      return `<li data-bre-type="bulleted_list" data-bre-id="${id}">${html || '<br>'}</li>`;
     }
     case 'numbered_list': {
-      const text = escapeHTML((block.data && block.data.text) || '');
-      return `<li data-bre-type="numbered_list" data-bre-id="${id}">${text || '<br>'}</li>`;
+      const html = (block.data && block.data.html != null)
+        ? sanitizeHTML(block.data.html)
+        : escapeHTML((block.data && block.data.text) || '');
+      return `<li data-bre-type="numbered_list" data-bre-id="${id}">${html || '<br>'}</li>`;
     }
     case 'divider': {
       return `<hr data-bre-type="divider" data-bre-id="${id}">`;
     }
     case 'formula': {
       const latex = (block.data && block.data.latex) || '';
+      const katex = getKaTeX();
+      if (!katex) return `<p data-bre-id="${id}"><em>[Formula: ${escapeHTML(latex)}]</em></p>`;
       try {
         const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
         const safe = sanitizeHTML(rendered, { allowKaTeX: true });
@@ -222,7 +235,7 @@ function surfaceToBlocks(surface) {
           const latex = formulaSpan.getAttribute('data-bre-latex') || '';
           blocks.push({ id, type: 'formula', data: { latex } });
         } else {
-          blocks.push({ id, type: 'paragraph', data: { text: node.textContent || '' } });
+          blocks.push({ id, type: 'paragraph', data: { html: sanitizeHTML(node.innerHTML) } });
         }
         break;
       }
@@ -233,11 +246,11 @@ function surfaceToBlocks(surface) {
       case 'H5':
       case 'H6': {
         const level = parseInt(tag[1], 10);
-        blocks.push({ id, type: 'heading', data: { level, text: node.textContent || '' } });
+        blocks.push({ id, type: 'heading', data: { level, html: sanitizeHTML(node.innerHTML) } });
         break;
       }
       case 'BLOCKQUOTE': {
-        blocks.push({ id, type: 'quote', data: { text: node.textContent || '' } });
+        blocks.push({ id, type: 'quote', data: { html: sanitizeHTML(node.innerHTML) } });
         break;
       }
       case 'PRE': {
@@ -252,7 +265,7 @@ function surfaceToBlocks(surface) {
         for (const li of node.children) {
           if (li.nodeName !== 'LI') continue;
           const liId = (li.dataset && li.dataset.breId) ? li.dataset.breId : generateId();
-          blocks.push({ id: liId, type: 'bulleted_list', data: { text: li.textContent || '' } });
+          blocks.push({ id: liId, type: 'bulleted_list', data: { html: sanitizeHTML(li.innerHTML) } });
         }
         break;
       }
@@ -261,7 +274,7 @@ function surfaceToBlocks(surface) {
         for (const li of node.children) {
           if (li.nodeName !== 'LI') continue;
           const liId = (li.dataset && li.dataset.breId) ? li.dataset.breId : generateId();
-          blocks.push({ id: liId, type: 'numbered_list', data: { text: li.textContent || '' } });
+          blocks.push({ id: liId, type: 'numbered_list', data: { html: sanitizeHTML(li.innerHTML) } });
         }
         break;
       }
@@ -308,7 +321,7 @@ function surfaceToBlocks(surface) {
           blocks.push({ id, type: 'table', data: { rows } });
         } else {
           // Chrome wraps new lines in divs — treat as paragraph
-          blocks.push({ id, type: 'paragraph', data: { text: node.textContent || '' } });
+          blocks.push({ id, type: 'paragraph', data: { html: sanitizeHTML(node.innerHTML) } });
         }
         break;
       }
@@ -324,7 +337,7 @@ function surfaceToBlocks(surface) {
       // Bare text at surface level — wrap as paragraph
       const text = child.textContent || '';
       if (text.trim()) {
-        blocks.push({ id: generateId(), type: 'paragraph', data: { text } });
+        blocks.push({ id: generateId(), type: 'paragraph', data: { html: escapeHTML(text) } });
       }
       continue;
     }
@@ -383,6 +396,8 @@ function blocksToHTML(blocks) {
 // ── BREW editor factory ────────────────────────────────────────────────────────
 
 export function createBrewEditor(container, options = {}) {
+  ensureKaTeXStyles();
+
   const opts = {
     mode: 'BREW',
     onChange: null,
@@ -886,6 +901,12 @@ export function createBrewEditor(container, options = {}) {
   });
 
   function insertFormula(latex) {
+    const katex = getKaTeX();
+    if (!katex) {
+      // KaTeX chunk still loading — retry once it's ready (button click, so delay is fine).
+      katexReady.then(() => insertFormula(latex));
+      return;
+    }
     try {
       const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
       const safe = sanitizeHTML(rendered, { allowKaTeX: true });
@@ -1167,6 +1188,8 @@ export function createBrewEditor(container, options = {}) {
       debouncedSync();
       return;
     }
+    const katex = getKaTeX();
+    if (!katex) return;
     try {
       const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
       const safe = sanitizeHTML(rendered, { allowKaTeX: true });
@@ -1302,10 +1325,22 @@ export function createBrewEditor(container, options = {}) {
     return sanitizeHTML(raw, { allowKaTeX: false, allowMedia: true });
   }
 
+  function setHTML(html) {
+    if (typeof html !== 'string') return;
+    const blocks = htmlToBlocks(html);
+    setJSON({
+      id: _docMeta.id,
+      version: _docMeta.version,
+      created: _docMeta.created,
+      updated: Date.now(),
+      blocks: blocks.length > 0 ? blocks : [{ id: generateId(), type: 'paragraph', data: { html: '' } }],
+    });
+  }
+
   function destroy() {
     document.removeEventListener('selectionchange', onSelectionChange);
     root.remove();
   }
 
-  return { getJSON, setJSON, getHTML, destroy };
+  return { getJSON, setJSON, getHTML, setHTML, destroy };
 }

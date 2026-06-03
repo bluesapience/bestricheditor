@@ -144,21 +144,8 @@ export function initDragHandles(root, state, renderer) {
 
     if (toIndex !== fromIndex) {
       state.moveBlock(fromIndex, toIndex);
-
-      // Re-render — move DOM element to match new order
-      const blocks = state.getBlocks();
-      const frag = document.createDocumentFragment();
-      // Remove and re-append all top-level block elements in new order
-      const blockEls = getTopLevelBlockEls();
-      for (const el of blockEls) {
-        root.removeChild(el);
-      }
-      for (const block of blocks) {
-        const el = renderer.getBlockEl(block.id);
-        if (el) frag.appendChild(el);
-      }
-      // Re-add drop line before appending
-      root.appendChild(frag);
+      // Full re-render preserves virtual renderer spacers and handles all cases cleanly.
+      renderer.renderAll(state.getBlocks());
       root.appendChild(dropLine);
     }
 

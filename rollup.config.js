@@ -4,11 +4,16 @@ import postcss from 'rollup-plugin-postcss';
 
 const isProd = process.env.BUILD === 'production';
 
-// Prod: ESM (with extracted CSS) + UMD (self-contained, CSS injected)
+// Prod: ESM (code-split, KaTeX in its own chunk) + UMD (all-in-one)
 const prodConfigs = [
   {
     input: 'src/bre.js',
-    output: { file: 'dist/bre.esm.js', format: 'esm' },
+    output: {
+      dir: 'dist',
+      format: 'esm',
+      entryFileNames: 'bre.esm.js',
+      chunkFileNames: 'chunks/[name]-[hash].js',
+    },
     plugins: [
       nodeResolve(),
       postcss({ extract: resolve('dist/bre.css'), minimize: true }),
@@ -16,7 +21,8 @@ const prodConfigs = [
   },
   {
     input: 'src/bre.js',
-    output: { file: 'dist/bre.umd.js', format: 'umd', name: 'bre', exports: 'named' },
+    // UMD inlines dynamic imports so everything stays in one file.
+    output: { file: 'dist/bre.umd.js', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true },
     plugins: [
       nodeResolve(),
       postcss({ inject: true, minimize: true }),

@@ -80,20 +80,20 @@ export function createSlashMenu(onSelect) {
     _activeIndex = 0;
     renderItems();
 
-    // Position below anchor
+    // Position below anchor — element is position:fixed so coordinates are viewport-relative.
     const menuHeight = 280;
-    let top = anchorRect.bottom + window.scrollY;
-    let left = anchorRect.left + window.scrollX;
+    let top = anchorRect.bottom;
+    let left = anchorRect.left;
 
     // Keep within viewport
-    if (top + menuHeight > window.innerHeight + window.scrollY) {
-      top = anchorRect.top + window.scrollY - menuHeight;
+    if (top + menuHeight > window.innerHeight) {
+      top = anchorRect.top - menuHeight;
     }
     if (left + 260 > window.innerWidth) {
       left = window.innerWidth - 270;
     }
 
-    menuEl.style.top = `${anchorRect.bottom}px`;
+    menuEl.style.top = `${top}px`;
     menuEl.style.left = `${left}px`;
     menuEl.style.display = 'block';
   }

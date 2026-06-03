@@ -11,9 +11,9 @@ Most rich text editors force you to pick one paradigm and stick with it. Best Ri
 | **BREW** | WYSIWYG editor — formatting toolbar | Non-technical users, prose-heavy content |
 
 - **Zero framework dependencies** — works with React, Vue, Svelte, Angular, or plain HTML
-- **Two runtime deps only** — [DOMPurify](https://github.com/cure53/DOMPurify) (XSS sanitization) + [KaTeX](https://katex.org/) (math rendering)
-- **14 block types** — headings, lists, quotes, code, tables, images, audio, video, KaTeX formulas, 2-column layouts
-- **Fully serializable** — `getJSON()` / `setJSON()` / `getHTML()` on every mode
+- **Two runtime deps** — [DOMPurify](https://github.com/cure53/DOMPurify) (XSS sanitization) + [KaTeX](https://katex.org/) (math, loaded lazily)
+- **14 block types** — headings, lists, quotes, code, tables, images, audio, video, KaTeX formulas, multi-column layouts
+- **Fully serializable** — `getJSON()` / `setJSON()` / `getHTML()` / `setHTML()` on every mode
 - **Safe by default** — all HTML output sanitized via DOMPurify; URL injection prevented
 
 ---
@@ -24,13 +24,33 @@ Most rich text editors force you to pick one paradigm and stick with it. Best Ri
 npm install bestricheditor
 ```
 
-If you use the **ESM build**, also import the stylesheet:
+### CSS requirements
+
+The editor needs **two stylesheets**:
+
+| Stylesheet | What it covers | How it loads |
+|---|---|---|
+| `dist/bre.css` | Editor layout, blocks, toolbar | You import it (ESM) or it auto-injects (UMD) |
+| KaTeX CSS | Math formula rendering | Auto-injected from jsDelivr CDN by the library |
+
+**ESM build** — import the editor stylesheet yourself:
 
 ```js
+import { createEditor } from 'bestricheditor';
 import 'bestricheditor/dist/bre.css';
+// KaTeX CSS is injected automatically from CDN when the editor mounts.
 ```
 
-The **UMD build** (`dist/bre.umd.js`) injects CSS automatically — no separate import needed.
+**UMD build** (`dist/bre.umd.js`) — both stylesheets are handled automatically; no imports needed.
+
+**Self-hosting KaTeX CSS** — to avoid the CDN fetch (offline apps, strict CSP), load your own copy before the editor:
+
+```html
+<!-- Must have id="bre-katex-css" so the library skips its auto-inject -->
+<link id="bre-katex-css" rel="stylesheet" href="/vendor/katex.min.css">
+```
+
+> **Note for direct ESM users (no bundler):** The ESM build code-splits KaTeX into `dist/chunks/`. Make sure your server also serves that directory so the lazy chunk can load.
 
 ---
 
@@ -38,7 +58,7 @@ The **UMD build** (`dist/bre.umd.js`) injects CSS automatically — no separate 
 
 ### BRE — Block editor
 
-Drag-and-drop blocks, slash menu, keyboard navigation, 2-column layout.
+Drag-and-drop blocks, slash menu, keyboard navigation, multi-column layout, undo/redo.
 
 ```js
 import { createEditor } from 'bestricheditor';
@@ -101,12 +121,13 @@ createEditor(container, {
 
 ## API
 
-Every mode exposes the same four methods:
+All three modes expose the same five methods:
 
 ```js
 editor.getJSON()        // → Document object
 editor.setJSON(doc)     // loads a Document object
 editor.getHTML()        // → sanitized HTML string
+editor.setHTML(html)    // parse an HTML string and load it as blocks
 editor.destroy()        // removes DOM, cleans up listeners
 ```
 
@@ -132,21 +153,23 @@ editor.destroy()        // removes DOM, cleans up listeners
 
 ### Block types
 
+Inline-capable blocks (`paragraph`, `heading`, `quote`, lists) store their content as sanitized HTML in the `html` field, preserving bold, italic, links, and other inline formatting.
+
 | Type | Data shape |
 |---|---|
-| `paragraph` | `{ text: string }` |
-| `heading` | `{ level: 1–6, text: string }` |
-| `quote` | `{ text: string }` |
+| `paragraph` | `{ html: string }` |
+| `heading` | `{ level: 1–6, html: string }` |
+| `quote` | `{ html: string }` |
 | `divider` | `{}` |
 | `code` | `{ language?: string, code: string }` |
-| `bulleted_list` | `{ text: string }` |
-| `numbered_list` | `{ text: string }` |
+| `bulleted_list` | `{ html: string }` |
+| `numbered_list` | `{ html: string }` |
 | `formula` | `{ latex: string, displayMode: boolean }` |
 | `table` | `{ rows: string[][] }` — first row is the header |
 | `image` | `{ src: string, alt?: string, caption?: string }` |
 | `audio` | `{ src: string, caption?: string }` |
 | `video` | `{ src: string, caption?: string }` |
-| `columns` | `{ children: Block[][] }` — 2-column layout |
+| `columns` | `{ columns: Block[][] }` — 2–4 column layout |
 | `markdown` | `{ markdown: string }` — BREM mode only |
 
 ```js
@@ -157,8 +180,8 @@ const doc = {
   created: Date.now(),
   updated: Date.now(),
   blocks: [
-    { id: '1', type: 'heading',   data: { level: 1, text: 'Hello world' } },
-    { id: '2', type: 'paragraph', data: { text: 'Rich text in the browser.' } },
+    { id: '1', type: 'heading',   data: { level: 1, html: 'Hello world' } },
+    { id: '2', type: 'paragraph', data: { html: 'Rich text with <strong>bold</strong> and <em>italic</em>.' } },
     { id: '3', type: 'formula',   data: { latex: 'E = mc^2', displayMode: true } },
     { id: '4', type: 'table',     data: { rows: [['Name','Score'],['Alice','98'],['Bob','87']] } },
     { id: '5', type: 'image',     data: { src: 'https://example.com/photo.jpg', alt: 'Photo', caption: 'My photo' } },
@@ -168,8 +191,6 @@ const doc = {
 
 editor.setJSON(doc);
 ```
-
-The same document object works with `setJSON` in any mode — BRE, BREM, and BREW all read from and write to the same schema.
 
 ---
 
@@ -181,7 +202,9 @@ The same document object works with `setJSON` in any mode — BRE, BREM, and BRE
 | Drag reorder | Drag the handle on the left of any block |
 | Keyboard splitting | `Enter` splits a block; `Backspace` at start merges |
 | Arrow navigation | `↑` / `↓` moves between blocks |
-| 2-column layout | Insert a **Columns** block; stacks on mobile |
+| Undo / redo | `⌘Z` / `Ctrl+Z` and `⌘⇧Z` / `Ctrl+Shift+Z` |
+| Link insert | `⌘K` / `Ctrl+K` on selected text |
+| Multi-column layout | Insert a **Columns** block (2, 3, or 4 columns); stacks on mobile |
 | Virtualized rendering | Pass `{ virtualize: true }` for 500+ block documents |
 
 ---
@@ -193,14 +216,16 @@ The same document object works with `setJSON` in any mode — BRE, BREM, and BRE
 | `⌘B` / `Ctrl+B` | Bold |
 | `⌘I` / `Ctrl+I` | Italic |
 | `⌘U` / `Ctrl+U` | Underline |
+| `⌘Z` / `Ctrl+Z` | Undo |
+| `⌘⇧Z` / `Ctrl+Shift+Z` | Redo |
 
 ---
 
 ## Math (KaTeX)
 
-Supported in all three modes.
+Supported in all three modes. KaTeX JS is loaded as a lazy chunk; KaTeX CSS is auto-injected from jsDelivr CDN. Neither blocks the initial page render. See [Installation](#installation) if you need to self-host the CSS.
 
-**BRE / BREW** — use the **∑ Formula** toolbar button, or supply a `formula` block via `setJSON`.
+**BRE / BREW** — use the **∑ Formula** button, or supply a `formula` block via `setJSON`.
 
 **BREM** — write `$inline$` or `$$display$$` in the textarea.
 
@@ -231,22 +256,59 @@ const editor = createEditor(container, { mode: 'BRE', virtualize: true });
 
 Only blocks visible in the viewport (± 30 blocks) are in the DOM. A prefix-sum array gives O(log n) window lookups and O(1) spacer height calculations.
 
+| Blocks | Standard `setJSON` | Virtualized `setJSON` |
+|---|---|---|
+| 500 | ~80–150 ms | ~10 ms |
+| 1 000 | ~150–300 ms | ~10 ms |
+| 5 000 | ~1–3 s | ~10 ms |
+
+---
+
+## Bundle size
+
+| Artifact | Raw | Gzip |
+|---|---|---|
+| `dist/bre.esm.js` (initial) | 234 kb | **53 kb** |
+| `dist/chunks/katex-*.js` (lazy) | 583 kb | 145 kb |
+| `dist/bre.umd.js` (all-in-one) | 876 kb | 204 kb |
+| `dist/bre.css` | 14 kb | 3 kb |
+
+The ESM build code-splits KaTeX into a separate chunk that loads in parallel and is only fetched when needed. Consumers using Vite or webpack get further automatic splitting on top of this. The UMD build bundles everything for script-tag usage.
+
 ---
 
 ## Styling
 
-The editor uses CSS custom properties. Override on `:root` or your container:
+The editor has no default outer padding — it fills whatever container you mount it in. Use CSS custom properties to theme it:
 
 ```css
 :root {
-  --bre-font-family: system-ui, sans-serif;
-  --bre-color-text:    #1a1a1a;
-  --bre-color-surface: #ffffff;
-  --bre-color-border:  #e0e0e0;
-  --bre-color-accent:  #2563eb;
-  --bre-color-muted:   #6b7280;
-  --bre-radius:        6px;
+  --bre-color-bg:          #ffffff;
+  --bre-color-surface:     #f9fafb;
+  --bre-color-text:        #111827;
+  --bre-color-text-muted:  #6b7280;
+  --bre-color-border:      #e5e7eb;
+  --bre-color-accent:      #3b82f6;
+  --bre-color-placeholder: #9ca3af;
+  --bre-color-code-bg:     #1e1e2e;
+  --bre-color-code-text:   #cdd6f4;
+  --bre-color-quote-border:#3b82f6;
+  --bre-font-sans:         system-ui, sans-serif;
+  --bre-font-mono:         'SFMono-Regular', Consolas, monospace;
+  --bre-radius:            6px;
+  --bre-editor-max-width:  720px;
+  --bre-editor-padding:    0;
 }
+```
+
+To add padding around the editor, either set `--bre-editor-padding` or add padding/margin to the container element:
+
+```css
+/* Option A — CSS variable */
+.my-editor-wrapper { --bre-editor-padding: 24px 32px; }
+
+/* Option B — container padding */
+.my-editor-wrapper { padding: 24px 32px; }
 ```
 
 ---
@@ -254,6 +316,7 @@ The editor uses CSS custom properties. Override on `:root` or your container:
 ## Security
 
 - All HTML output sanitized by **DOMPurify** before any `innerHTML` write
+- Paste events fully sanitized regardless of source
 - All `href` / `src` values validated — `javascript:` and `data:` URLs are rejected
 - YouTube/Vimeo iframes use `sandbox`, `referrerpolicy`, and `loading="lazy"`
 - No `eval()` anywhere in the codebase

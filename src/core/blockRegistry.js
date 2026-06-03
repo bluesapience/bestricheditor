@@ -44,6 +44,14 @@ export const blockRegistry = {
   },
 
   /**
+   * Register a block type plugin without the overwrite warning.
+   * Use for intentional re-registration (e.g. video with a per-instance allowlist).
+   */
+  registerSilent(type, plugin) {
+    _registry.set(type, plugin);
+  },
+
+  /**
    * Return the capabilities of a registered block type.
    * Falls back to a safe default if the plugin has no capabilities defined.
    */

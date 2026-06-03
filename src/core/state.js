@@ -18,9 +18,39 @@ export function createState(initialDoc) {
   let doc = initialDoc ? { ...initialDoc } : makeDoc();
   const subscribers = new Set();
 
+  let undoStack = [];
+  let redoStack = [];
+
   function notify() {
     for (const fn of subscribers) fn(doc);
   }
+
+  function saveUndoSnapshot() {
+    undoStack.push(JSON.parse(JSON.stringify(doc.blocks)));
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack = [];
+  }
+
+  function undo() {
+    if (undoStack.length === 0) return false;
+    redoStack.push(JSON.parse(JSON.stringify(doc.blocks)));
+    if (redoStack.length > 100) redoStack.shift();
+    doc = { ...doc, blocks: undoStack.pop(), updated: Date.now() };
+    notify();
+    return true;
+  }
+
+  function redo() {
+    if (redoStack.length === 0) return false;
+    undoStack.push(JSON.parse(JSON.stringify(doc.blocks)));
+    if (undoStack.length > 100) undoStack.shift();
+    doc = { ...doc, blocks: redoStack.pop(), updated: Date.now() };
+    notify();
+    return true;
+  }
+
+  function canUndo() { return undoStack.length > 0; }
+  function canRedo() { return redoStack.length > 0; }
 
   function getDoc() {
     return doc;
@@ -140,10 +170,12 @@ export function createState(initialDoc) {
   }
 
   /**
-   * Load a full document into state.
+   * Load a full document into state. Clears undo/redo history.
    */
   function setDoc(newDoc) {
     doc = { ...newDoc };
+    undoStack = [];
+    redoStack = [];
     notify();
   }
 
@@ -184,5 +216,10 @@ export function createState(initialDoc) {
     setDoc,
     updateColumnBlock,
     subscribe,
+    saveUndoSnapshot,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
   };
 }

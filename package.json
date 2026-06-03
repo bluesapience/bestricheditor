@@ -1,6 +1,6 @@
 {
   "name": "bestricheditor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One library, every editing style — block editor (BRE), Markdown (BREM), and WYSIWYG (BREW). Native JS, no frameworks.",
   "type": "module",
   "main": "dist/bre.umd.js",
@@ -17,6 +17,7 @@
     "dist/bre.esm.js",
     "dist/bre.umd.js",
     "dist/bre.css",
+    "dist/chunks",
     "README.md"
   ],
   "keywords": [

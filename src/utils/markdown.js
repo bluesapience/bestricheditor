@@ -2,7 +2,7 @@
  * Internal Markdown parser + KaTeX renderer for BREM mode.
  * No external markdown library — hand-rolled to keep the bundle lean.
  */
-import katex from 'katex';
+import { getKaTeX } from './katex-lazy.js';
 import { sanitizeURL } from './sanitize.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -79,14 +79,15 @@ function processInline(text) {
       const end = text.indexOf('$$', i + 2);
       if (end !== -1) {
         const tex = text.slice(i + 2, end);
-        try {
-          const rendered = katex.renderToString(tex, {
-            displayMode: true,
-            throwOnError: true,
-            output: 'html',
-          });
-          out += `<span class="bre-katex-block">${rendered}</span>`;
-        } catch {
+        const katex = getKaTeX();
+        if (katex) {
+          try {
+            const rendered = katex.renderToString(tex, { displayMode: true, throwOnError: true, output: 'html' });
+            out += `<span class="bre-katex-block">${rendered}</span>`;
+          } catch {
+            out += `<code>${escapeHTML(tex)}</code>`;
+          }
+        } else {
           out += `<code>${escapeHTML(tex)}</code>`;
         }
         i = end + 2;
@@ -101,16 +102,18 @@ function processInline(text) {
         const tex = text.slice(i + 1, end);
         // Only if single-line (no newlines) and non-empty
         if (!tex.includes('\n') && tex.trim().length > 0) {
-          try {
-            const rendered = katex.renderToString(tex, {
-              displayMode: false,
-              throwOnError: true,
-              output: 'html',
-            });
-            out += rendered;
-            i = end + 1;
-            continue;
-          } catch {
+          const katex = getKaTeX();
+          if (katex) {
+            try {
+              out += katex.renderToString(tex, { displayMode: false, throwOnError: true, output: 'html' });
+              i = end + 1;
+              continue;
+            } catch {
+              out += `<code>${escapeHTML(tex)}</code>`;
+              i = end + 1;
+              continue;
+            }
+          } else {
             out += `<code>${escapeHTML(tex)}</code>`;
             i = end + 1;
             continue;

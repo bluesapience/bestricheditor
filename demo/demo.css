@@ -52,3 +52,10 @@ body {
   min-height: 500px;
   overflow: hidden;
 }
+
+/* Give the editor padding so content isn't flush to the card edge.
+   Left is wider than right to leave room for the drag handles (which sit
+   at -28px from the block) while keeping them inside the card's overflow:hidden. */
+#bre-demo {
+  --bre-editor-padding: 20px 32px 32px 44px;
+}

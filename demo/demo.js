@@ -11,71 +11,71 @@ const BRE_DOC = {
     {
       id: 'b1',
       type: 'heading',
-      data: { level: 1, text: 'Best Rich Editor' },
+      data: { level: 1, html: 'Best Rich Editor' },
     },
     {
       id: 'b2',
       type: 'paragraph',
       data: {
-        text: 'A Notion-like block editor built with Native JavaScript — no TypeScript, no frameworks. Try typing, pressing Enter to split blocks, Backspace to merge, or / to open the block menu.',
+        html: 'A Notion-like block editor built with <strong>Native JavaScript</strong> — no TypeScript, no frameworks. Try typing, pressing <code>Enter</code> to split blocks, <code>Backspace</code> to merge, or <code>/</code> to open the block menu.',
       },
     },
     {
       id: 'b3',
       type: 'heading',
-      data: { level: 2, text: 'Text Blocks' },
+      data: { level: 2, html: 'Text Blocks' },
     },
     {
       id: 'b4',
       type: 'paragraph',
       data: {
-        text: 'This is a paragraph block. Click to edit. Press Enter to create a new block below.',
+        html: 'This is a paragraph block. Click to edit. Press <code>Enter</code> to create a new block below. Try <strong>⌘B</strong> for bold, <em>⌘I</em> for italic, <code>⌘K</code> for a link.',
       },
     },
     {
       id: 'b5',
       type: 'heading',
-      data: { level: 2, text: 'Lists' },
+      data: { level: 2, html: 'Lists' },
     },
     {
       id: 'b6',
       type: 'bulleted_list',
-      data: { text: 'First bulleted item' },
+      data: { html: 'First bulleted item' },
     },
     {
       id: 'b7',
       type: 'bulleted_list',
-      data: { text: 'Second bulleted item' },
+      data: { html: 'Second bulleted item with <strong>bold</strong> and <em>italic</em>' },
     },
     {
       id: 'b8',
       type: 'bulleted_list',
-      data: { text: 'Third bulleted item' },
+      data: { html: 'Third bulleted item' },
     },
     {
       id: 'b9',
       type: 'numbered_list',
-      data: { text: 'First numbered item' },
+      data: { html: 'First numbered item' },
     },
     {
       id: 'b10',
       type: 'numbered_list',
-      data: { text: 'Second numbered item' },
+      data: { html: 'Second numbered item' },
     },
     {
       id: 'b11',
       type: 'numbered_list',
-      data: { text: 'Third numbered item' },
+      data: { html: 'Third numbered item' },
     },
     {
       id: 'b12',
       type: 'heading',
-      data: { level: 2, text: 'More Blocks' },
+      data: { level: 2, html: 'More Blocks' },
     },
     {
       id: 'b13',
       type: 'quote',
-      data: { text: 'The best way to predict the future is to invent it. — Alan Kay' },
+      data: { html: 'The best way to predict the future is to invent it. — <strong>Alan Kay</strong>' },
     },
     {
       id: 'b14',
@@ -93,7 +93,7 @@ const BRE_DOC = {
     {
       id: 'b15b',
       type: 'heading',
-      data: { level: 2, text: 'Formula (KaTeX)' },
+      data: { level: 2, html: 'Formula (KaTeX)' },
     },
     {
       id: 'b15c',
@@ -108,7 +108,7 @@ const BRE_DOC = {
     {
       id: 'b16',
       type: 'heading',
-      data: { level: 2, text: 'Columns 2' },
+      data: { level: 2, html: 'Columns 2' },
     },
     {
       id: 'b17',
@@ -119,14 +119,14 @@ const BRE_DOC = {
             {
               id: 'col2-1-p1',
               type: 'paragraph',
-              data: { text: 'Left column. Each column is independently editable.' },
+              data: { html: 'Left column. Each column is <strong>independently editable</strong>.' },
             },
           ],
           [
             {
               id: 'col2-2-p1',
               type: 'paragraph',
-              data: { text: 'Right column. Stacks vertically on screens ≤ 600px.' },
+              data: { html: 'Right column. Stacks vertically on screens ≤ 600px.' },
             },
           ],
         ],
@@ -135,7 +135,7 @@ const BRE_DOC = {
     {
       id: 'b18',
       type: 'heading',
-      data: { level: 2, text: 'Columns 3' },
+      data: { level: 2, html: 'Columns 3' },
     },
     {
       id: 'b19',
@@ -146,21 +146,21 @@ const BRE_DOC = {
             {
               id: 'col3-1-p1',
               type: 'paragraph',
-              data: { text: 'First column. Three columns side by side above 600px.' },
+              data: { html: 'First column. Three columns side by side above 600px.' },
             },
           ],
           [
             {
               id: 'col3-2-p1',
               type: 'paragraph',
-              data: { text: 'Second column. Great for feature comparisons or triads.' },
+              data: { html: 'Second column. Great for feature comparisons or triads.' },
             },
           ],
           [
             {
               id: 'col3-3-p1',
               type: 'paragraph',
-              data: { text: 'Third column. Stacks vertically on screens ≤ 600px.' },
+              data: { html: 'Third column. Stacks vertically on screens ≤ 600px.' },
             },
           ],
         ],
@@ -169,7 +169,7 @@ const BRE_DOC = {
     {
       id: 'b20',
       type: 'heading',
-      data: { level: 2, text: 'Columns 4' },
+      data: { level: 2, html: 'Columns 4' },
     },
     {
       id: 'b21',
@@ -180,28 +180,28 @@ const BRE_DOC = {
             {
               id: 'col4-1-p1',
               type: 'paragraph',
-              data: { text: 'Column 1. Four columns above 1000px.' },
+              data: { html: 'Column 1. Four columns above 1000px.' },
             },
           ],
           [
             {
               id: 'col4-2-p1',
               type: 'paragraph',
-              data: { text: 'Column 2. 2×2 grid between 601–1000px.' },
+              data: { html: 'Column 2. 2×2 grid between 601–1000px.' },
             },
           ],
           [
             {
               id: 'col4-3-p1',
               type: 'paragraph',
-              data: { text: 'Column 3. 2×2 grid between 601–1000px.' },
+              data: { html: 'Column 3. 2×2 grid between 601–1000px.' },
             },
           ],
           [
             {
               id: 'col4-4-p1',
               type: 'paragraph',
-              data: { text: 'Column 4. Single stack on screens ≤ 600px.' },
+              data: { html: 'Column 4. Single stack on screens ≤ 600px.' },
             },
           ],
         ],
@@ -210,7 +210,7 @@ const BRE_DOC = {
     {
       id: 'b22',
       type: 'heading',
-      data: { level: 2, text: 'Table' },
+      data: { level: 2, html: 'Table' },
     },
     {
       id: 'b23',
@@ -227,7 +227,7 @@ const BRE_DOC = {
     {
       id: 'b24',
       type: 'heading',
-      data: { level: 2, text: 'Image' },
+      data: { level: 2, html: 'Image' },
     },
     {
       id: 'b25',
@@ -241,7 +241,7 @@ const BRE_DOC = {
     {
       id: 'b26',
       type: 'heading',
-      data: { level: 2, text: 'Audio' },
+      data: { level: 2, html: 'Audio' },
     },
     {
       id: 'b27',
@@ -254,7 +254,7 @@ const BRE_DOC = {
     {
       id: 'b28',
       type: 'heading',
-      data: { level: 2, text: 'Video' },
+      data: { level: 2, html: 'Video' },
     },
     {
       id: 'b29',
@@ -278,7 +278,7 @@ const BREW_DOC = {
     {
       id: 'bw1',
       type: 'heading',
-      data: { level: 1, text: 'BREW — WYSIWYG Mode' },
+      data: { level: 1, html: 'BREW — WYSIWYG Mode' },
     },
     {
       id: 'bw2',
@@ -290,37 +290,37 @@ const BREW_DOC = {
     {
       id: 'bw3',
       type: 'heading',
-      data: { level: 2, text: 'Text Formatting' },
+      data: { level: 2, html: 'Text Formatting' },
     },
     {
       id: 'bw4',
       type: 'paragraph',
-      data: { text: 'Select text and use Bold (⌘B), Italic (⌘I), or Underline (⌘U) from the toolbar.' },
+      data: { html: 'Select text and use Bold (⌘B), Italic (⌘I), or Underline (⌘U) from the toolbar.' },
     },
     {
       id: 'bw5',
       type: 'quote',
-      data: { text: 'The best way to predict the future is to invent it. — Alan Kay' },
+      data: { html: 'The best way to predict the future is to invent it. — Alan Kay' },
     },
     {
       id: 'bw6',
       type: 'bulleted_list',
-      data: { text: 'First bulleted item' },
+      data: { html: 'First bulleted item' },
     },
     {
       id: 'bw7',
       type: 'bulleted_list',
-      data: { text: 'Second bulleted item' },
+      data: { html: 'Second bulleted item' },
     },
     {
       id: 'bw8',
       type: 'numbered_list',
-      data: { text: 'First numbered item' },
+      data: { html: 'First numbered item' },
     },
     {
       id: 'bw9',
       type: 'numbered_list',
-      data: { text: 'Second numbered item' },
+      data: { html: 'Second numbered item' },
     },
     {
       id: 'bw10',
@@ -338,7 +338,7 @@ const BREW_DOC = {
     {
       id: 'bw12',
       type: 'heading',
-      data: { level: 2, text: 'Formula (KaTeX)' },
+      data: { level: 2, html: 'Formula (KaTeX)' },
     },
     {
       id: 'bw13',
@@ -353,7 +353,7 @@ const BREW_DOC = {
     {
       id: 'bw15',
       type: 'heading',
-      data: { level: 2, text: 'Media & Table' },
+      data: { level: 2, html: 'Media & Table' },
     },
     {
       id: 'bw16',
@@ -497,10 +497,10 @@ if (card) {
     editor.destroy();
 
     const BLOCK_TYPES = [
-      () => ({ type: 'paragraph', data: { text: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor.' } }),
-      () => ({ type: 'heading',   data: { level: 2, text: 'Section Heading' } }),
-      () => ({ type: 'quote',     data: { text: 'The best way to predict the future is to invent it.' } }),
-      () => ({ type: 'bulleted_list', data: { text: 'List item content' } }),
+      () => ({ type: 'paragraph', data: { html: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor.' } }),
+      () => ({ type: 'heading',   data: { level: 2, html: 'Section Heading' } }),
+      () => ({ type: 'quote',     data: { html: 'The best way to predict the future is to invent it.' } }),
+      () => ({ type: 'bulleted_list', data: { html: 'List item content' } }),
       () => ({ type: 'code',      data: { language: 'js', code: 'const x = 1 + 2;\nconsole.log(x);' } }),
     ];
 

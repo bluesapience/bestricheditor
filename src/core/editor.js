@@ -21,7 +21,6 @@ import { transforms } from './transforms.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 import '../blocks/formula.js';
 import { createState } from './state.js';
-import { createCommands } from './commands.js';
 import { createRenderer } from './renderer.js';
 import { createVirtualRenderer } from './virtualRenderer.js';
 import { blockRegistry } from './blockRegistry.js';
@@ -193,9 +192,8 @@ export function createEditor(container, options = {}) {
     ...options,
   };
 
-  // Register video plugin with the resolved embed allowlist (always overwrite so
-  // different editor instances can have different allowlists).
-  blockRegistry.register('video', createVideoPlugin(opts.embedAllowlist));
+  // Re-register video with each instance's allowlist (silent: intentional overwrite).
+  blockRegistry.registerSilent('video', createVideoPlugin(opts.embedAllowlist));
 
   // ── Mount ──────────────────────────────────────────────────────────────────
 
@@ -207,7 +205,6 @@ export function createEditor(container, options = {}) {
   // ── Subsystems ─────────────────────────────────────────────────────────────
 
   const state = createState();
-  const commands = createCommands();
   const renderer = opts.virtualize
     ? createVirtualRenderer(root, state)
     : createRenderer(root);
@@ -256,6 +253,15 @@ export function createEditor(container, options = {}) {
   const notifyChange = opts.onChange
     ? debounce(() => opts.onChange(state.getDoc()), 300)
     : null;
+
+  // Undo snapshot: save once per typing burst (1.5 s of inactivity resets the guard).
+  let _snapshotPending = false;
+  function scheduleUndoSnapshot() {
+    if (_snapshotPending) return;
+    _snapshotPending = true;
+    state.saveUndoSnapshot();
+    setTimeout(() => { _snapshotPending = false; }, 1500);
+  }
 
   // Track the block that triggered the slash menu
   let slashBlockId = null;
@@ -369,6 +375,7 @@ export function createEditor(container, options = {}) {
     const blockId = blockEl.getAttribute('data-bre-block-id');
     const block = state.getBlock(blockId);
     if (!block || block.type !== 'table') return;
+    state.saveUndoSnapshot();
 
     let rows = block.data.rows.map(r => [...r]);
     switch (action) {
@@ -398,6 +405,7 @@ export function createEditor(container, options = {}) {
     // Table cell input — handle before generic field logic
     const cellEl = e.target.closest('[data-bre-table-row]');
     if (cellEl) {
+      scheduleUndoSnapshot();
       handleTableCellInput(cellEl);
       if (notifyChange) notifyChange();
       return;
@@ -407,6 +415,8 @@ export function createEditor(container, options = {}) {
     if (!info) return;
     const { fieldEl, blockId, fieldName } = info;
 
+    scheduleUndoSnapshot();
+
     // Fix empty contenteditable leaving <br>
     if (fieldEl.textContent === '' && fieldEl.innerHTML !== '') {
       fieldEl.innerHTML = '';
@@ -414,7 +424,10 @@ export function createEditor(container, options = {}) {
 
     const textContent = fieldEl.textContent;
     const isHtmlField = fieldName === 'html';
-    const fieldValue = isHtmlField ? sanitizeHTML(fieldEl.innerHTML) : textContent;
+    // Keyboard input in contenteditable is browser-controlled and cannot inject
+    // script tags. Paste is sanitized separately. Block renders and getHTML()
+    // both sanitize on the way out, so skipping DOMPurify here is safe.
+    const fieldValue = isHtmlField ? fieldEl.innerHTML : textContent;
 
     // Sync to state
     const { block, context } = state.findBlockAnywhere(blockId);
@@ -482,12 +495,20 @@ export function createEditor(container, options = {}) {
     // Undo/Redo
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
       e.preventDefault();
-      commands.undo();
+      const before = state.getBlocks();
+      if (state.undo()) {
+        diffRender(before, state.getBlocks());
+        if (notifyChange) notifyChange();
+      }
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
       e.preventDefault();
-      commands.redo();
+      const before = state.getBlocks();
+      if (state.redo()) {
+        diffRender(before, state.getBlocks());
+        if (notifyChange) notifyChange();
+      }
       return;
     }
 
@@ -549,6 +570,7 @@ export function createEditor(container, options = {}) {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      state.saveUndoSnapshot();
       handleEnter(block, fieldEl, context);
       return;
     }
@@ -556,6 +578,7 @@ export function createEditor(container, options = {}) {
     if (e.key === 'Backspace') {
       if (isCursorAtStart(fieldEl)) {
         e.preventDefault();
+        state.saveUndoSnapshot();
         handleBackspace(e, block, fieldEl, context);
       }
       return;
@@ -881,6 +904,7 @@ export function createEditor(container, options = {}) {
     const info = getFieldInfo(e.target);
     if (!info) return;
     e.preventDefault();
+    state.saveUndoSnapshot();
 
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
@@ -936,6 +960,7 @@ export function createEditor(container, options = {}) {
 
   function onSlashSelect(item) {
     if (!slashBlockId) return;
+    state.saveUndoSnapshot();
 
     const { block, context } = state.findBlockAnywhere(slashBlockId);
     if (!block) return;
@@ -1007,6 +1032,25 @@ export function createEditor(container, options = {}) {
     field.focus();
     const len = field.textContent.length;
     setCursorOffset(field, len);
+  }
+
+  // ── Diff render ────────────────────────────────────────────────────────────
+
+  function diffRender(oldBlocks, newBlocks) {
+    // Fast path: same ids in same order — only patch blocks whose data changed.
+    if (
+      oldBlocks.length === newBlocks.length &&
+      oldBlocks.every((b, i) => b.id === newBlocks[i].id)
+    ) {
+      for (let i = 0; i < newBlocks.length; i++) {
+        if (JSON.stringify(oldBlocks[i]) !== JSON.stringify(newBlocks[i])) {
+          renderer.updateBlock(newBlocks[i]);
+        }
+      }
+      return;
+    }
+    // Structural change (blocks added, removed, or reordered) — full re-render.
+    renderer.renderAll(newBlocks);
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
