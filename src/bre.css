@@ -224,15 +224,8 @@ code[data-bre-placeholder]:empty::before {
    Lists
 ─────────────────────────────────────────────── */
 .bre-bulleted-list {
-  margin: 0;
-  padding: 3px 0;
-  list-style: disc inside;
-}
-
-.bre-numbered-list {
-  margin: 0;
-  padding: 3px 0;
-  list-style: none;
+  display: list-item;
+  list-style-position: inside;
 }
 
 .bre-block--numbered_list {
@@ -247,7 +240,6 @@ code[data-bre-placeholder]:empty::before {
 
 .bre-numbered-list::before {
   content: counter(bre-numbered) '. ';
-  font-variant-numeric: tabular-nums;
 }
 
 /* ───────────────────────────────────────────────

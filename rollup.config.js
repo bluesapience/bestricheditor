@@ -42,7 +42,7 @@ if (!isProd) {
 
   config = {
     input: 'src/bre.js',
-    output: { file: 'dist/bre.esm.js', format: 'esm', sourcemap: true },
+    output: { file: 'dist/bre.esm.js', format: 'esm', sourcemap: true, inlineDynamicImports: true },
     plugins: [
       nodeResolve(),
       postcss({ inject: true }),
