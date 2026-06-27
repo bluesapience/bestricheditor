@@ -200,12 +200,26 @@ editor.setJSON(doc);
 |---|---|
 | Slash menu | Press `/` to open a searchable block inserter |
 | Drag reorder | Drag the handle on the left of any block |
+| Inline toolbar | Select text → floating toolbar appears with Bold, Italic, Underline, Code, Link buttons |
 | Keyboard splitting | `Enter` splits a block; `Backspace` at start merges |
 | Arrow navigation | `↑` / `↓` moves between blocks |
 | Undo / redo | `⌘Z` / `Ctrl+Z` and `⌘⇧Z` / `Ctrl+Shift+Z` |
-| Link insert | `⌘K` / `Ctrl+K` on selected text |
 | Multi-column layout | Insert a **Columns** block (2, 3, or 4 columns); stacks on mobile |
 | Virtualized rendering | Pass `{ virtualize: true }` for 500+ block documents |
+
+## BRE — Inline formatting keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `⌘B` / `Ctrl+B` | Bold |
+| `⌘I` / `Ctrl+I` | Italic |
+| `⌘U` / `Ctrl+U` | Underline |
+| `⌘/` / `Ctrl+/` | Inline code |
+| `⌘K` / `Ctrl+K` | Link (prompts for URL) |
+| `⌘Z` / `Ctrl+Z` | Undo |
+| `⌘⇧Z` / `Ctrl+Shift+Z` | Redo |
+
+Buttons shown in the floating toolbar are context-aware — only the marks supported by the current block type appear (e.g. headings show Bold + Italic only; paragraphs show all five).
 
 ---
 
@@ -268,10 +282,10 @@ Only blocks visible in the viewport (± 30 blocks) are in the DOM. A prefix-sum 
 
 | Artifact | Raw | Gzip |
 |---|---|---|
-| `dist/bre.esm.js` (initial) | 234 kb | **53 kb** |
-| `dist/chunks/katex-*.js` (lazy) | 583 kb | 145 kb |
-| `dist/bre.umd.js` (all-in-one) | 876 kb | 204 kb |
-| `dist/bre.css` | 14 kb | 3 kb |
+| `dist/bre.esm.js` (initial) | 244 kb | **55 kb** |
+| `dist/chunks/katex-*.js` (lazy) | 597 kb | 145 kb |
+| `dist/bre.umd.js` (all-in-one) | 887 kb | 206 kb |
+| `dist/bre.css` | 15 kb | 3 kb |
 
 The ESM build code-splits KaTeX into a separate chunk that loads in parallel and is only fetched when needed. Consumers using Vite or webpack get further automatic splitting on top of this. The UMD build bundles everything for script-tag usage.
 
@@ -293,7 +307,7 @@ The editor has no default outer padding — it fills whatever container you moun
   --bre-color-code-bg:     #1e1e2e;
   --bre-color-code-text:   #cdd6f4;
   --bre-color-quote-border:#3b82f6;
-  --bre-font-sans:         system-ui, sans-serif;
+  --bre-font-sans:         inherit;              /* inherits host app font by default */
   --bre-font-mono:         'SFMono-Regular', Consolas, monospace;
   --bre-radius:            6px;
   --bre-editor-max-width:  720px;
