@@ -14,7 +14,7 @@
   --bre-color-code-text:   #cdd6f4;
   --bre-color-quote-border:#3b82f6;
 
-  --bre-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --bre-font-sans: inherit;
   --bre-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 
   --bre-radius:           6px;
@@ -26,9 +26,9 @@
    Editor root
 ─────────────────────────────────────────────── */
 .bre-editor {
-  font-family: var(--bre-font-sans);
-  font-size: 16px;
-  line-height: 1.6;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
   color: var(--bre-color-text);
   background: var(--bre-color-bg);
   max-width: var(--bre-editor-max-width);
@@ -223,29 +223,20 @@ code[data-bre-placeholder]:empty::before {
 /* ───────────────────────────────────────────────
    Lists
 ─────────────────────────────────────────────── */
-.bre-bulleted-list,
+.bre-bulleted-list {
+  margin: 0;
+  padding: 3px 0;
+  list-style: disc inside;
+}
+
 .bre-numbered-list {
   margin: 0;
   padding: 3px 0;
   list-style: none;
 }
 
-.bre-bulleted-list::before {
-  content: '•';
-  position: absolute;
-  left: -14px;
-  color: var(--bre-color-text);
-  font-size: 1.2em;
-  line-height: 1.5;
-}
-
-.bre-block--bulleted_list {
-  padding-left: 20px;
-}
-
 .bre-block--numbered_list {
   counter-increment: bre-numbered;
-  padding-left: 28px;
 }
 
 /* Reset counter on first numbered item preceded by non-numbered */
@@ -255,12 +246,8 @@ code[data-bre-placeholder]:empty::before {
 }
 
 .bre-numbered-list::before {
-  content: counter(bre-numbered) '.';
-  position: absolute;
-  left: 0;
-  color: var(--bre-color-text);
+  content: counter(bre-numbered) '. ';
   font-variant-numeric: tabular-nums;
-  min-width: 24px;
 }
 
 /* ───────────────────────────────────────────────
