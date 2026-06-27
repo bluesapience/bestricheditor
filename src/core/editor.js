@@ -26,6 +26,7 @@ import { createVirtualRenderer } from './virtualRenderer.js';
 import { blockRegistry } from './blockRegistry.js';
 import { createSlashMenu } from '../ui/slashMenu.js';
 import { initDragHandles } from '../ui/dragHandle.js';
+import { createInlineToolbar } from '../ui/inlineToolbar.js';
 import { createVideoPlugin } from '../blocks/video.js';
 
 // Register all block types (side effects)
@@ -219,6 +220,9 @@ export function createEditor(container, options = {}) {
 
   // Drag handles
   initDragHandles(root, state, renderer);
+
+  // Inline formatting toolbar
+  const inlineToolbar = createInlineToolbar(root, { handleLinkInsert });
 
   // Register paste pipeline steps (idempotent — only register once globally)
   if (!transforms.has('paste')) {
@@ -557,6 +561,27 @@ export function createEditor(container, options = {}) {
         return;
       }
       return; // Let all other keys work naturally inside table cells
+    }
+
+    // Inline formatting shortcuts — gated on block capability
+    if (e.ctrlKey || e.metaKey) {
+      const fmtKey = e.key === '/' ? 'code'
+        : e.key === 'b' ? 'bold'
+        : e.key === 'i' ? 'italic'
+        : e.key === 'u' ? 'underline'
+        : null;
+      if (fmtKey) {
+        const fmtInfo = getFieldInfo(e.target);
+        if (fmtInfo) {
+          const { block: fmtBlock } = state.findBlockAnywhere(fmtInfo.blockId);
+          const caps = fmtBlock && blockRegistry.get(fmtBlock.type)?.capabilities;
+          if (caps?.marks?.includes(fmtKey)) {
+            e.preventDefault();
+            inlineToolbar.handleMark(fmtKey);
+            return;
+          }
+        }
+      }
     }
 
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -1137,6 +1162,7 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('paste', handlePaste);
     root.removeEventListener('click', handleClick);
     slashMenu.destroy();
+    inlineToolbar.destroy();
     if (renderer.destroy) renderer.destroy();
     root.remove();
   }
