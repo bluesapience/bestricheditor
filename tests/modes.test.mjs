@@ -349,8 +349,8 @@ test('BREW: dialogs open next to what they edit, not at the editor corner', () =
   ev(fig, 'dblclick');
   const dlg = host.querySelector('.bre-brew-media-dialog');
   assert.ok(dlg);
-  assert.equal(dlg.style.top, '326px', 'below the image: 420 - 100 + 6');
-  assert.equal(dlg.style.left, '150px', 'aligned with the image: 200 - 50');
+  assert.equal(dlg.style.top, '200px', 'top-left corner on the image: 300 - 100');
+  assert.equal(dlg.style.left, '150px', 'left edge on the image: 200 - 50');
   dlg.querySelector('.bre-brew-link-cancel').click();
   // far-right anchors are clamped inside the editor
   fig.getBoundingClientRect = () => ({ top: 300, bottom: 420, left: 840, right: 900, width: 60, height: 120 });
@@ -359,5 +359,38 @@ test('BREW: dialogs open next to what they edit, not at the editor corner', () =
   const dlg2 = host.querySelector('.bre-brew-media-dialog');
   assert.equal(dlg2.style.left, '520px', 'clamped: 800 - 280');
   delete HTMLElement.prototype.offsetWidth;
+  ed.destroy();
+});
+
+test('BREW: every media block has Edit / Remove buttons (works for iframe video, audio, image)', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 'a', type: 'audio', data: { src: 'https://example.com/a.mp3', caption: '' } },
+    { id: 'v', type: 'video', data: { src: 'https://www.youtube.com/watch?v=abcdefghijk', caption: '' } },
+    { id: 'm', type: 'video', data: { src: 'https://example.com/a.mp4', caption: '' } },
+  ]));
+  const figs = host.querySelectorAll('figure[data-bre-type]');
+  assert.equal(figs.length, 4);
+  assert.ok(figs[2].querySelector('iframe'), 'youtube is an iframe (clicks never reach the page)');
+  for (const f of figs) {
+    assert.ok(f.querySelector('[data-bre-media-action="edit"]'), f.getAttribute('data-bre-type') + ' has Edit');
+    assert.ok(f.querySelector('[data-bre-media-action="remove"]'));
+  }
+  // Edit button opens the dialog for the iframe video; Remove deletes it
+  ev(figs[2].querySelector('[data-bre-media-action="edit"]'), 'click');
+  assert.ok(host.querySelector('.bre-brew-media-dialog'), 'edit opens the dialog');
+  host.querySelector('.bre-brew-link-cancel').click();
+  ev(figs[2].querySelector('[data-bre-media-action="remove"]'), 'click');
+  ev(figs[1].querySelector('[data-bre-media-action="remove"]'), 'click');
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['image', 'video']);
+  // the buttons never leak into the saved document or exported HTML
+  assert.doesNotMatch(ed.getHTML(), /button|bre-media-controls/);
+  assert.doesNotMatch(JSON.stringify(ed.getJSON()), /button|bre-media-controls/);
+  // read-only hides them
+  ed.setReadOnly(true);
+  for (const c of host.querySelectorAll('.bre-media-controls')) assert.ok(c.hidden);
   ed.destroy();
 });

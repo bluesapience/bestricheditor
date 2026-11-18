@@ -87,6 +87,7 @@ export const DEFAULT_MESSAGES = {
   addCol: '+ Col',
   delCol: '− Col',
   delTable: 'Delete table',
+  mediaEdit: 'Edit',
   formulaDialog: 'Edit formula',
   formulaPlaceholder: 'LaTeX, e.g. E = mc^2',
   blockSelected: 'Block selected. Press Delete to remove it, Enter to edit.',
@@ -333,6 +334,13 @@ export function createBrewEditor(container, options = {}) {
   }
 
   /** Complex (non-text) block -> HTML snippet string. */
+  // Edit / Remove buttons under each media block. Needed because embeds (iframes)
+  // swallow clicks and a native <video> double-click toggles fullscreen.
+  function mediaControls() {
+    const b = (a, label) => `<button type="button" class="bre-table-btn" data-bre-media-action="${a}">${escapeHTML(label)}</button>`;
+    return `<div class="bre-media-controls" contenteditable="false"${readOnly ? ' hidden' : ''}>${b('edit', messages.mediaEdit)}${b('remove', messages.remove)}</div>`;
+  }
+
   function snippetFor(block, id) {
     const d = block.data || {};
     switch (block.type) {
@@ -366,14 +374,14 @@ export function createBrewEditor(container, options = {}) {
         const inner = src
           ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(d.alt || '')}" loading="lazy">`
           : `<div class="bre-image-placeholder">${escapeHTML(messages.imagePlaceholder)}</div>`;
-        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls()}</figure>`;
       }
       case 'audio': {
         const src = d.src || '';
         const inner = src
           ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
           : `<div class="bre-audio-placeholder">${escapeHTML(messages.audioPlaceholder)}</div>`;
-        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls()}</figure>`;
       }
       case 'video': {
         const src = d.src || '';
@@ -382,7 +390,7 @@ export function createBrewEditor(container, options = {}) {
         if (!src) inner = `<div class="bre-video-placeholder">${escapeHTML(messages.videoPlaceholder)}</div>`;
         else if (embedUrl) inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
         else inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
-        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls()}</figure>`;
       }
       default:
         return '';
@@ -852,7 +860,7 @@ export function createBrewEditor(container, options = {}) {
    * selection), clamped inside the editor. Without this an absolutely positioned
    * dialog sits at the editor's top-left corner.
    */
-  function positionDialog(dialog, anchor) {
+  function positionDialog(dialog, anchor, atCorner) {
     const rect = (a) => {
       try { return a && a.getBoundingClientRect ? a.getBoundingClientRect() : null; } catch (_) { return null; }
     };
@@ -860,14 +868,15 @@ export function createBrewEditor(container, options = {}) {
     if (!r || (!r.width && !r.height)) r = rect(toolbar) || rect(surface); // collapsed range etc.
     if (!r) return;
     const rootRect = root.getBoundingClientRect();
-    const top = r.bottom - rootRect.top + 6;
+    // atCorner: dialog's top-left sits on the anchor's top-left; otherwise just below it.
+    const top = atCorner ? r.top - rootRect.top : r.bottom - rootRect.top + 6;
     const maxLeft = Math.max(0, rootRect.width - dialog.offsetWidth);
     const left = Math.max(0, Math.min(r.left - rootRect.left, maxLeft));
     dialog.style.top = top + 'px';
     dialog.style.left = left + 'px';
   }
 
-  function openDialog({ className, label, fields, savedRange, anchor, validate, onSave, onRemove }) {
+  function openDialog({ className, label, fields, savedRange, anchor, atCorner, validate, onSave, onRemove }) {
     if (activeDialog) activeDialog.close(false);
 
     const dialog = document.createElement('div');
@@ -944,7 +953,7 @@ export function createBrewEditor(container, options = {}) {
     });
 
     root.appendChild(dialog);
-    positionDialog(dialog, anchor || savedRange);
+    positionDialog(dialog, anchor || savedRange, atCorner);
     // Deferred: the mousedown that opened the dialog is still bubbling.
     outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
     activeDialog = { dialog, close };
@@ -981,6 +990,7 @@ export function createBrewEditor(container, options = {}) {
     fields.push({ key: 'caption', placeholder: messages.caption, value: caption });
     openDialog({
       anchor,
+      atCorner: !!anchor,
       className: 'bre-brew-link-dialog bre-brew-media-dialog',
       label: messages.mediaDialog,
       savedRange,
@@ -1187,6 +1197,17 @@ export function createBrewEditor(container, options = {}) {
         },
         anchorEl,
       );
+      return;
+    }
+
+    const mediaActionBtn = e.target.closest('[data-bre-media-action]');
+    if (mediaActionBtn && surface.contains(mediaActionBtn)) {
+      e.preventDefault();
+      const fig = mediaActionBtn.closest('figure[data-bre-type]');
+      if (fig) {
+        if (mediaActionBtn.getAttribute('data-bre-media-action') === 'remove') removeBlockEl(fig);
+        else showMediaDialog(fig);
+      }
       return;
     }
 
@@ -1432,7 +1453,7 @@ export function createBrewEditor(container, options = {}) {
     for (const cap of surface.querySelectorAll('.bre-media-caption')) {
       cap.setAttribute('contenteditable', readOnly ? 'false' : 'true');
     }
-    for (const c of surface.querySelectorAll('.bre-table-controls')) c.hidden = readOnly;
+    for (const c of surface.querySelectorAll('.bre-table-controls, .bre-media-controls')) c.hidden = readOnly;
   }
 
   function applyReadOnly() {

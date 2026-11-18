@@ -296,7 +296,7 @@ Buttons shown in the floating toolbar are context-aware — only the marks suppo
 |---|---|
 | Select an image / audio / video / divider | Click it (outline, `data-bre-selected`) |
 | Delete it | `Backspace` / `Delete` (undoable with `⌘Z`); `Esc` deselects |
-| Edit media source, alt, caption | `Enter` on the selected block, or double-click; the dialog also has **Remove** |
+| Edit media source, alt, caption | **Edit** button under the block (works for embedded video), `Enter` on the selected block, or double-click. The dialog also has **Remove**; there is a **Remove** button under the block too |
 | Delete a table | **Delete table** button in the table controls |
 | Edit / remove a formula | Click it → dialog with **Remove** |
 
