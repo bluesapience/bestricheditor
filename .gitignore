@@ -31,3 +31,7 @@ npm-debug.log*
 # Test coverage
 coverage/
 .nyc_output/
+
+# AI planning docs (local only)
+docs/bre-chatgpt-update.md
+docs/bre-claude-update.md
