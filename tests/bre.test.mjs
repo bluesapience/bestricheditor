@@ -809,3 +809,147 @@ test('BRE end of doc: the theme leaves a clickable tail below the content (CSS c
   assert.match(css, /\.bre-editor\[data-bre-mode="BRE"\]\s*\{[^}]*padding-bottom:\s*var\(--bre-tail,\s*3em\)/);
   assert.match(css, /\.bre-brew-surface\s*\{[^}]*padding-bottom:\s*var\(--bre-tail,\s*3em\)/);
 });
+
+// ── Review fixes: focus, dialogs, handle, table arrows ───────────────────────
+const mediaDoc = () => doc([
+  para('a', 'before'),
+  { id: 'img', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+  para('z', 'after'),
+]);
+const caret = (node, offset) => { const s = window.getSelection(); s.removeAllRanges(); const r = document.createRange(); r.setStart(node, offset); r.collapse(true); s.addRange(r); };
+
+test('table controls: mousedown must not steal focus from the cell (Safari/Firefox hide them otherwise)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['a'], ['b']] } }]));
+  const e = fire(host.querySelector('[data-bre-table-action="add-row"]'), 'mousedown');
+  assert.ok(e.defaultPrevented);
+  ed.destroy();
+});
+
+test('dialog: Cmd/Ctrl+Z inside the input dialog does not undo the document', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'one')]));
+  const field = host.querySelector('[data-bre-field]');
+  field.textContent = 'two';
+  fire(field, 'input');
+  // open the formula dialog through the slash flow
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } }]));
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  const input = dlg().querySelector('input');
+  const e = fire(input, 'keydown', { key: 'z', metaKey: true });
+  assert.ok(!e.defaultPrevented, 'native input undo is left alone');
+  assert.equal(ed.getJSON().blocks[0].type, 'formula', 'document untouched');
+  fire(dlg(), 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('dialog: always gets a position (collapsed anchor falls back), and closes on pointerdown outside', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', '')]));
+  const field = host.querySelector('[data-bre-field]');
+  field.focus();
+  caret(field, 0);
+  fire(field, 'keydown', { key: 'k', metaKey: true });
+  await tick(5);
+  const d = dlg();
+  assert.ok(d, 'link dialog opened');
+  assert.notEqual(d.style.top, '', 'positioned even though the saved range has no rect');
+  assert.notEqual(d.style.left, '');
+  await tick(5);
+  fire(document.body, 'pointerdown'); // the drag handle suppresses mousedown, so pointerdown it is
+  assert.equal(dlg(), null, 'closed by an outside pointerdown');
+  ed.destroy();
+});
+
+test('dialog: cancelling after a media dblclick keeps the block selected (focus can return)', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(mediaDoc());
+  fire(host.querySelector('.bre-image'), 'click');
+  const wrapper = host.querySelector('[data-bre-block-id="img"]');
+  assert.ok(wrapper.hasAttribute('data-bre-selected'));
+  fire(wrapper, 'dblclick'); // dblclick target bubbles from the wrapper's child normally; use the image
+  fire(host.querySelector('.bre-image'), 'dblclick');
+  await tick(5);
+  fire(dlg().querySelector('input'), 'focusin'); // focus moves into the dialog
+  assert.ok(wrapper.hasAttribute('data-bre-selected') && wrapper.hasAttribute('tabindex'), 'selection + tabindex survive');
+  ed.destroy();
+});
+
+test('undo after deleting media keeps focus in the editor (lands in the restored block) and clears stale selection', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(mediaDoc());
+  fire(host.querySelector('.bre-image'), 'click');
+  fire(host.querySelector('[data-bre-block-id="img"]'), 'keydown', { key: 'Delete' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'z']);
+  const focused = [];
+  const orig = window.HTMLElement.prototype.focus;
+  window.HTMLElement.prototype.focus = function () { focused.push(this); };
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  window.HTMLElement.prototype.focus = orig;
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'img', 'z']);
+  const restored = host.querySelector('[data-bre-block-id="img"]');
+  assert.ok(focused.length && restored.contains(focused.at(-1)), 'focus goes into the restored block, not <body>');
+  assert.equal(host.querySelectorAll('[data-bre-selected]').length, 0, 'no stale selection left over');
+  // a block with NO field (divider) is selected instead, so a second Cmd+Z still has a focus target
+  ed.setJSON(doc([para('a', 'x'), { id: 'hr', type: 'divider', data: {} }, para('z', 'y')]));
+  fire(host.querySelector('.bre-divider'), 'click');
+  fire(host.querySelector('[data-bre-block-id="hr"]'), 'keydown', { key: 'Delete' });
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  assert.ok(host.querySelector('[data-bre-block-id="hr"]').hasAttribute('data-bre-selected'), 'divider re-selected');
+  ed.destroy();
+});
+
+test('drag handle: right/middle press is ignored; a press with no buttons held drops the stale press', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(mediaDoc());
+  fire(host.querySelector('[data-bre-block-id="img"]'), 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  fire(handle, 'pointerdown', { button: 2, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointerup', { button: 2, clientX: 5, clientY: 5, pointerId: 1 });
+  assert.equal(document.querySelector('.bre-block-menu').hidden, true, 'right-click does not open the menu');
+  // stale press: left press, then pointermove with no buttons held, then a big move must NOT start a drag
+  fire(handle, 'pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointermove', { buttons: 0, clientX: 5, clientY: 80, pointerId: 1 });
+  assert.equal(host.querySelectorAll('[data-bre-dragging]').length, 0);
+  ed.destroy();
+});
+
+test('drag handle: hovering the gutter/root beside a tall block keeps the handle; the click after a press is swallowed', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x'), { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  fire(host.querySelector('[data-bre-block-id="i"]'), 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  assert.equal(handle.hidden, false);
+  fire(host.querySelector('.bre-editor'), 'pointerover'); // gutter
+  assert.equal(handle.hidden, false, 'still visible');
+  // after a handle click, the retargeted click on root must not add a line at the end
+  fire(handle, 'pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointerup', { button: 0, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(host.querySelector('.bre-editor'), 'click');
+  assert.equal(ed.getJSON().blocks.length, 2, 'no stray paragraph');
+  fire(document.querySelector('.bre-block-menu'), 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('table arrows leave the table only from the cell\'s edge (wrapped cells move line-by-line)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['aaaa bbbb'], ['cccc dddd']] } }]));
+  const last = host.querySelector('[data-bre-table-row="1"]');
+  caret(last.firstChild, 3); // middle of the text: a wrapped cell would move down a line natively
+  const mid = fire(last, 'keydown', { key: 'ArrowDown' });
+  assert.ok(!mid.defaultPrevented);
+  assert.equal(ed.getJSON().blocks.length, 1);
+  caret(last.firstChild, last.firstChild.length); // at the end
+  fire(last, 'keydown', { key: 'ArrowDown' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['table', 'paragraph']);
+  ed.destroy();
+});

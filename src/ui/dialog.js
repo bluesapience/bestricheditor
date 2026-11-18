@@ -34,9 +34,14 @@ export function createDialogs({ getRoot, messages, fallbackEls = () => [], focus
     // spanWidth: as wide as the block being edited (never narrower than a usable form).
     if (spanWidth) dialog.style.width = Math.min(Math.max(r.width, 280), rootRect.width || r.width) + 'px';
     // atCorner: dialog's top-left sits on the anchor's top-left; otherwise just below it.
-    const top = atCorner ? r.top - rootRect.top : r.bottom - rootRect.top + 6;
-    const maxLeft = Math.max(0, rootRect.width - (dialog.offsetWidth || 0));
-    const left = Math.max(0, Math.min(r.left - rootRect.left, maxLeft));
+    // Offsets are measured from the root's padding box and include its own scroll
+    // (a host may make the editor scrollable).
+    const root = getRoot();
+    const originTop = rootRect.top + (root.clientTop || 0) - (root.scrollTop || 0);
+    const originLeft = rootRect.left + (root.clientLeft || 0) - (root.scrollLeft || 0);
+    const top = atCorner ? r.top - originTop : r.bottom - originTop + 6;
+    const maxLeft = Math.max(0, rootRect.width - (dialog.offsetWidth || 0)) + (root.scrollLeft || 0);
+    const left = Math.max(0, Math.min(r.left - originLeft, maxLeft));
     dialog.style.top = top + 'px';
     dialog.style.left = left + 'px';
   }
@@ -92,7 +97,7 @@ export function createDialogs({ getRoot, messages, fallbackEls = () => [], focus
 
     function close(restoreFocus) {
       clearTimeout(outsideTimer);
-      document.removeEventListener('mousedown', outside);
+      document.removeEventListener('pointerdown', outside);
       dialog.remove();
       if (active && active.dialog === dialog) active = null;
       if (restoreFocus && !isDestroyed()) {
@@ -129,8 +134,9 @@ export function createDialogs({ getRoot, messages, fallbackEls = () => [], focus
 
     getRoot().appendChild(dialog);
     position(dialog, anchor || savedRange, atCorner, spanWidth);
-    // Deferred: the mousedown that opened the dialog is still bubbling.
-    outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
+    // Deferred: the press that opened the dialog is still bubbling. (pointerdown, not
+    // mousedown: the drag handle suppresses the compat mousedown.)
+    outsideTimer = setTimeout(() => document.addEventListener('pointerdown', outside), 0);
     active = { dialog, close };
     const first = Object.values(inputs)[0];
     if (first) first.focus();

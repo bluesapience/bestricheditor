@@ -19,6 +19,7 @@ import {
   escapeHTML,
   isCursorAtStart,
   isCursorAtEnd,
+  caretAtEdge,
   setCursorOffset,
 } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
@@ -290,6 +291,7 @@ export function createEditor(container, options = {}) {
   }
 
   function rerenderAll() {
+    clearSelection();
     renderer.renderAll(state.getBlocks());
     placeholderEl = null;
     drag.refresh();
@@ -298,7 +300,7 @@ export function createEditor(container, options = {}) {
   updatePlaceholder();
 
   // ── Input dialog (the same inline dialog BREW uses; override with options.prompt) ──
-  const dialogs = createDialogs({ getRoot: () => root, messages, isDestroyed: () => destroyed });
+  const dialogs = createDialogs({ getRoot: () => root, messages, fallbackEls: () => [content, root], isDestroyed: () => destroyed });
 
   const urlValidator = (allowEmpty) => (v) => ((allowEmpty && v.v === '') || (v.v && sanitizeURL(v.v)) ? [] : ['v']);
 
@@ -335,6 +337,7 @@ export function createEditor(container, options = {}) {
   root.addEventListener('input', handleInput);
   root.addEventListener('keydown', handleKeydown);
   root.addEventListener('paste', handlePaste);
+  root.addEventListener('mousedown', keepCaretOnControls);
   root.addEventListener('click', handleClick);
   root.addEventListener('dblclick', handleDblClick);
   root.addEventListener('drop', handleDrop);
@@ -385,7 +388,9 @@ export function createEditor(container, options = {}) {
         };
       }
     }
-    if (selectedEl && e.target !== selectedEl) clearSelection();
+    // Focus moving into the input dialog keeps the block selected (and its tabindex,
+    // so focus can return to it when the dialog closes).
+    if (selectedEl && e.target !== selectedEl && !(e.target.closest && e.target.closest('.bre-brew-link-dialog'))) clearSelection();
     if (hasFocus) return;
     hasFocus = true;
     emitter.emit('focus', undefined);
@@ -470,6 +475,13 @@ export function createEditor(container, options = {}) {
     const last = blocks[blocks.length - 1];
     if (last && hasInline(last) && last.type !== 'code') focusBlockEnd(last.id);
     else appendParagraphAtEnd();
+  }
+
+  // Table controls are shown only while the table has focus. Safari/Firefox don't
+  // focus a <button> on mousedown, so without this the cell would blur, the controls
+  // would hide, and the click would never land. Keep focus (and the caret) in the cell.
+  function keepCaretOnControls(e) {
+    if (e.target.closest && e.target.closest('[data-bre-table-action]')) e.preventDefault();
   }
 
   async function handleClick(e) {
@@ -826,6 +838,9 @@ export function createEditor(container, options = {}) {
 
   // ── Keydown ────────────────────────────────────────────────────────────────
   function handleKeydown(e) {
+    // Keys typed inside the input dialog belong to the dialog (its own undo, Enter, Esc).
+    if (e.target.closest && e.target.closest('.bre-brew-link-dialog')) return;
+
     // Undo / Redo
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z' || e.key === 'y')) {
       if (readOnly) return;
@@ -909,13 +924,13 @@ export function createEditor(container, options = {}) {
         if (tb && tb.type === 'table') {
           const idx = state.getBlockIndex(tb.id);
           const blocks = state.getBlocks();
-          if (e.key === 'ArrowDown' && row === tb.data.rows.length - 1) {
+          if (e.key === 'ArrowDown' && row === tb.data.rows.length - 1 && caretAtEdge(tableCellEl, 'end')) {
             e.preventDefault();
             const n = blocks[idx + 1];
             if (n) focusOrSelect(n.id); else appendParagraphAtEnd();
             return;
           }
-          if (e.key === 'ArrowUp' && row === 0 && idx > 0) {
+          if (e.key === 'ArrowUp' && row === 0 && idx > 0 && caretAtEdge(tableCellEl, 'start')) {
             e.preventDefault();
             focusOrSelect(blocks[idx - 1].id, true);
             return;
@@ -1587,7 +1602,7 @@ export function createEditor(container, options = {}) {
       // Keep keyboard focus inside the editor so repeated Cmd+Z keeps working.
       const i = firstDifference(oldBlocks, newBlocks);
       const target = newBlocks[Math.min(i, newBlocks.length - 1)];
-      if (target) focusBlockEnd(target.id);
+      if (target) focusOrSelect(target.id, true);
     }
     updatePlaceholder();
   }
@@ -1600,6 +1615,7 @@ export function createEditor(container, options = {}) {
 
   /** Re-render after a structural edit, keeping the scroll window in virtual mode. */
   function refreshAll() {
+    clearSelection(); // the selected element is about to be replaced
     renderer.refresh(state.getBlocks());
     placeholderEl = null;
     drag.refresh();
@@ -1767,6 +1783,7 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('input', handleInput);
     root.removeEventListener('keydown', handleKeydown);
     root.removeEventListener('paste', handlePaste);
+    root.removeEventListener('mousedown', keepCaretOnControls);
     root.removeEventListener('click', handleClick);
     root.removeEventListener('dblclick', handleDblClick);
     root.removeEventListener('drop', handleDrop);

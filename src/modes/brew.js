@@ -15,7 +15,7 @@
 
 import { loadKaTeX, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { generateId } from '../utils/id.js';
-import { escapeHTML } from '../utils/dom.js';
+import { escapeHTML, caretAtEdge } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
 import { createDialogs } from '../ui/dialog.js';
@@ -1218,6 +1218,12 @@ export function createBrewEditor(container, options = {}) {
     openFormulaDialog(formulaEl);
   });
 
+  // Controls are shown only while their block has focus; Safari/Firefox don't focus a
+  // <button> on mousedown, so keep focus where it is or the controls hide before the click.
+  listen(surface, 'mousedown', (e) => {
+    if (e.target.closest && e.target.closest('[data-bre-table-action], [data-bre-media-action]')) e.preventDefault();
+  });
+
   // Double-click a media block to edit its source / alt / caption.
   listen(surface, 'dblclick', (e) => {
     if (readOnly) return;
@@ -1277,7 +1283,7 @@ export function createBrewEditor(container, options = {}) {
         const row = parseInt(tcell.getAttribute('data-bre-table-row'), 10);
         const last = wrapper.querySelectorAll('tr').length - 1;
         const dir = e.key === 'ArrowDown' ? 'nextElementSibling' : 'previousElementSibling';
-        if ((e.key === 'ArrowDown' && row === last) || (e.key === 'ArrowUp' && row === 0)) {
+        if ((e.key === 'ArrowDown' && row === last && caretAtEdge(tcell, 'end')) || (e.key === 'ArrowUp' && row === 0 && caretAtEdge(tcell, 'start'))) {
           e.preventDefault();
           const sib = wrapper[dir];
           if (!sib) { if (e.key === 'ArrowDown') appendParagraphAtEnd(); }

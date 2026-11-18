@@ -65,7 +65,8 @@ export function initDragHandles(root, content, state, renderer, hooks) {
   }
 
   function onPointerOver(e) {
-    if (dragging || e.target === handle) return;
+    // Hovering the gutter/padding beside a tall block must not hide the handle.
+    if (dragging || e.target === handle || e.target === root || e.target === content) return;
     place(topLevelBlock(e.target));
   }
 
@@ -118,6 +119,7 @@ export function initDragHandles(root, content, state, renderer, hooks) {
   function onPointerDown(e) {
     const h = e.target.closest('[data-bre-handle]');
     if (!h || !hoveredEl || isReadOnly()) return;
+    if (e.button !== undefined && e.button !== 0) return; // right/middle press: leave alone
     e.preventDefault();
     // A press only becomes a drag after moving; a plain click opens the block menu.
     pending = {
@@ -138,6 +140,8 @@ export function initDragHandles(root, content, state, renderer, hooks) {
   }
 
   function onPointerMove(e) {
+    // Button released outside (context menu swallowed pointerup): drop the stale press.
+    if (pending && e.buttons === 0) pending = null;
     if (pending && !dragging) {
       if (Math.hypot(e.clientX - pending.x, e.clientY - pending.y) < DRAG_THRESHOLD) return;
       startDrag();
@@ -176,17 +180,28 @@ export function initDragHandles(root, content, state, renderer, hooks) {
     onMove({ blockId: id, from, to });
   }
 
+  // The press captured the pointer on root, so the browser fires the follow-up
+  // `click` at root; the editor would read that as "click below the last block".
+  function swallowNextClick() {
+    const stop = (ev) => { ev.stopPropagation(); };
+    root.addEventListener('click', stop, { capture: true, once: true });
+    setTimeout(() => root.removeEventListener('click', stop, { capture: true }), 150);
+  }
+
   function onPointerUp(e) {
     if (pending && !dragging) {
       const { id, rect } = pending;
       pending = null;
+      swallowNextClick();
       try { root.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
       // Notion-style: the menu opens just to the right of the handle, level with it.
       const anchorRect = { top: rect.top, bottom: rect.top, left: rect.right + 4, right: rect.right + 4 };
       if (onHandleClick) onHandleClick({ blockId: id, anchorRect });
       return;
     }
+    const wasDragging = dragging;
     endDrag(e, true);
+    if (wasDragging) swallowNextClick();
   }
   function onPointerCancel(e) {
     pending = null;
