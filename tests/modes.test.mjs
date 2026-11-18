@@ -337,3 +337,27 @@ test('BREW: captions under image/audio/video are editable inline and saved', asy
   for (const c of host.querySelectorAll('figcaption.bre-media-caption')) assert.equal(c.getAttribute('contenteditable'), 'true');
   ed.destroy();
 });
+
+test('BREW: dialogs open next to what they edit, not at the editor corner', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const root = host.querySelector('.bre-editor');
+  root.getBoundingClientRect = () => ({ top: 100, bottom: 900, left: 50, right: 850, width: 800, height: 800 });
+  const fig = host.querySelector('figure[data-bre-type="image"]');
+  fig.getBoundingClientRect = () => ({ top: 300, bottom: 420, left: 200, right: 500, width: 300, height: 120 });
+  ev(fig, 'dblclick');
+  const dlg = host.querySelector('.bre-brew-media-dialog');
+  assert.ok(dlg);
+  assert.equal(dlg.style.top, '326px', 'below the image: 420 - 100 + 6');
+  assert.equal(dlg.style.left, '150px', 'aligned with the image: 200 - 50');
+  dlg.querySelector('.bre-brew-link-cancel').click();
+  // far-right anchors are clamped inside the editor
+  fig.getBoundingClientRect = () => ({ top: 300, bottom: 420, left: 840, right: 900, width: 60, height: 120 });
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return 280; } });
+  ev(fig, 'dblclick');
+  const dlg2 = host.querySelector('.bre-brew-media-dialog');
+  assert.equal(dlg2.style.left, '520px', 'clamped: 800 - 280');
+  delete HTMLElement.prototype.offsetWidth;
+  ed.destroy();
+});

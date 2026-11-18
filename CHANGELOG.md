@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- BREW: link, media and formula dialogs opened at the editor's top-left corner; they now appear just below the element or selection they edit, clamped inside the editor.
 - BREW: captions under image/audio/video are editable inline again (click and type; Enter commits), with a placeholder when empty; they lock in read-only mode.
 - BREW: table control buttons and KaTeX markup were stripped from editor-generated snippets (toolbar-inserted tables/formulas); they are now sanitized with the right allowances.
 - Columns content was silently dropped when a BRE document was loaded into BREW or BREM (data shape `columns` vs `children`); both shapes are now read.

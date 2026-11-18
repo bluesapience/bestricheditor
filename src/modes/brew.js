@@ -847,7 +847,27 @@ export function createBrewEditor(container, options = {}) {
    * to the surface; Enter confirms. `fields`: [{ key, type, placeholder, value }].
    * `onSave(values)` runs after `validate(values)` returns no invalid keys.
    */
-  function openDialog({ className, label, fields, savedRange, validate, onSave, onRemove }) {
+  /**
+   * Place a dialog just below its anchor (an Element, Range, or the saved
+   * selection), clamped inside the editor. Without this an absolutely positioned
+   * dialog sits at the editor's top-left corner.
+   */
+  function positionDialog(dialog, anchor) {
+    const rect = (a) => {
+      try { return a && a.getBoundingClientRect ? a.getBoundingClientRect() : null; } catch (_) { return null; }
+    };
+    let r = rect(anchor);
+    if (!r || (!r.width && !r.height)) r = rect(toolbar) || rect(surface); // collapsed range etc.
+    if (!r) return;
+    const rootRect = root.getBoundingClientRect();
+    const top = r.bottom - rootRect.top + 6;
+    const maxLeft = Math.max(0, rootRect.width - dialog.offsetWidth);
+    const left = Math.max(0, Math.min(r.left - rootRect.left, maxLeft));
+    dialog.style.top = top + 'px';
+    dialog.style.left = left + 'px';
+  }
+
+  function openDialog({ className, label, fields, savedRange, anchor, validate, onSave, onRemove }) {
     if (activeDialog) activeDialog.close(false);
 
     const dialog = document.createElement('div');
@@ -924,6 +944,7 @@ export function createBrewEditor(container, options = {}) {
     });
 
     root.appendChild(dialog);
+    positionDialog(dialog, anchor || savedRange);
     // Deferred: the mousedown that opened the dialog is still bubbling.
     outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
     activeDialog = { dialog, close };
@@ -931,8 +952,9 @@ export function createBrewEditor(container, options = {}) {
     if (first) first.focus();
   }
 
-  function openLinkDialog({ text, url }, savedRange, onSave, onRemove) {
+  function openLinkDialog({ text, url }, savedRange, onSave, onRemove, anchor) {
     openDialog({
+      anchor,
       className: 'bre-brew-link-dialog',
       label: messages.linkDialog,
       savedRange,
@@ -951,13 +973,14 @@ export function createBrewEditor(container, options = {}) {
     });
   }
 
-  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave, onRemove) {
+  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave, onRemove, anchor) {
     const fields = [{
       key: 'src', placeholder: type === 'image' ? messages.imageUrl : type === 'audio' ? messages.audioUrl : messages.videoUrl, value: src,
     }];
     if (type === 'image') fields.push({ key: 'alt', placeholder: messages.altText, value: alt });
     fields.push({ key: 'caption', placeholder: messages.caption, value: caption });
     openDialog({
+      anchor,
       className: 'bre-brew-link-dialog bre-brew-media-dialog',
       label: messages.mediaDialog,
       savedRange,
@@ -1127,7 +1150,7 @@ export function createBrewEditor(container, options = {}) {
       ));
       if (node && figureEl.parentNode) figureEl.parentNode.replaceChild(node, figureEl);
       scheduleChange();
-    }, () => removeBlockEl(figureEl));
+    }, () => removeBlockEl(figureEl), figureEl);
   }
 
   for (const [btn, type] of [[btnImage, 'image'], [btnAudio, 'audio'], [btnVideo, 'video']]) {
@@ -1162,6 +1185,7 @@ export function createBrewEditor(container, options = {}) {
           anchorEl.replaceWith(document.createTextNode(anchorEl.textContent || ''));
           scheduleChange();
         },
+        anchorEl,
       );
       return;
     }
@@ -1282,6 +1306,7 @@ export function createBrewEditor(container, options = {}) {
         });
       },
       onRemove: () => removeBlockEl(formulaEl),
+      anchor: formulaEl,
     });
   }
 
