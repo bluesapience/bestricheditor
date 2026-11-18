@@ -4,9 +4,8 @@
  * The input is sanitized ONCE by DOMPurify into a DOM fragment; every block's
  * inline html is then read from already-clean nodes (no per-block re-sanitize).
  */
-import DOMPurify from 'dompurify';
 import { generateId } from './id.js';
-import { sanitizeURL, FORBIDDEN_TAGS } from './sanitize.js';
+import { sanitizeURL, sanitizeToFragment } from './sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
 
 const BLOCK_SELECTOR =
@@ -31,12 +30,8 @@ function makeBlock(type, data) {
 export function htmlToBlocks(html) {
   if (typeof html !== 'string' || !html.trim()) return [];
 
-  const frag = DOMPurify.sanitize(html, {
-    USE_PROFILES: { html: true },
-    FORBID_ATTR: ['style'],
-    FORBID_TAGS: FORBIDDEN_TAGS,
-    RETURN_DOM_FRAGMENT: true,
-  });
+  // Same policy as everywhere else (no style/id/name/data: URIs/form controls).
+  const frag = sanitizeToFragment(html);
 
   const blocks = [];
   walkChildren(frag, blocks);

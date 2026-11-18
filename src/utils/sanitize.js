@@ -45,6 +45,16 @@ function cleanStyle(str) {
   return out.join(';');
 }
 
+// `data:` URIs are never allowed in editor HTML (images, video, links, SVG <image href>…):
+// DOMPurify permits them on media tags by default, which would smuggle inline payloads.
+const URI_ATTRS = new Set(['src', 'href', 'xlink:href', 'poster', 'action', 'formaction', 'background', 'data', 'ping']);
+const DATA_URI = /^[\s\u0000-\u001f]*data:/i;
+function blockDataUris(_node, ev) {
+  const name = (ev.attrName || '').toLowerCase();
+  if (URI_ATTRS.has(name) && DATA_URI.test(ev.attrValue)) ev.keepAttr = false;
+  else if (name === 'srcset' && /(^|[\s,])data:/i.test(ev.attrValue)) ev.keepAttr = false;
+}
+
 function isSafeIframeSrc(src) {
   return SAFE_IFRAME_ORIGINS.some(prefix => src.startsWith(prefix));
 }
@@ -90,7 +100,12 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false, allowButton
   // one exception — it needs style for layout — and is scrubbed by a hook below.
   if (!allowKaTeX && !allowMedia) {
     // id/name are dropped: they let content clobber window/document globals (DOM clobbering).
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style', 'id', 'name'], FORBID_TAGS: forbidTags, ...extra });
+    DOMPurify.addHook('uponSanitizeAttribute', blockDataUris);
+    try {
+      return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style', 'id', 'name'], FORBID_TAGS: forbidTags, ...extra });
+    } finally {
+      DOMPurify.removeHook('uponSanitizeAttribute');
+    }
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
@@ -119,6 +134,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false, allowButton
   };
 
   DOMPurify.addHook('afterSanitizeAttributes', hook);
+  DOMPurify.addHook('uponSanitizeAttribute', blockDataUris);
 
   let result;
   try {
@@ -135,6 +151,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false, allowButton
   } finally {
     // Always unhook: the ESM build shares the host app's DOMPurify instance.
     DOMPurify.removeHook('afterSanitizeAttributes');
+    DOMPurify.removeHook('uponSanitizeAttribute');
   }
 
   return result;

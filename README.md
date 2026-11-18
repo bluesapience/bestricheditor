@@ -433,6 +433,9 @@ Useful hooks: `.bre-block--{type}`, `[data-bre-selected]` (selected media/divide
 
 ## Security
 
+- **`getJSON()` / `onChange` / `getHTML()` output is sanitized**, so it is safe to render the `html` fields of a block or store them for others to view. (`setJSON()` accepts anything and renders it sanitized; cleaning of the returned JSON happens lazily, once per block.)
+- **`data:` URIs are never allowed** in editor HTML (images, video, links, SVG), and `javascript:` is rejected everywhere.
+
 - All HTML output sanitized by **DOMPurify** before any `innerHTML` write
 - Paste events fully sanitized regardless of source
 - All `href` / `src` values validated — `javascript:` and `data:` URLs are rejected

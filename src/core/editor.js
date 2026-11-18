@@ -41,6 +41,7 @@ import { createInlineToolbar } from '../ui/inlineToolbar.js';
 import { createBlockMenu } from '../ui/blockMenu.js';
 import { createDialogs } from '../ui/dialog.js';
 import { cleanBlock } from '../utils/docHygiene.js';
+import { isSimpleInlineHTML } from '../utils/blocksToHTML.js';
 
 // Register all block types (side effects)
 import '../blocks/formula.js';
@@ -222,24 +223,51 @@ export function createEditor(container, options = {}) {
   ensurePastePipeline();
 
   // ── Change notification (debounced; sanitizes lazily first) ────────────────
-  const unsafe = new Set(); // block ids whose html field was stored raw
+  const unsafe = new Set(); // (legacy bookkeeping) block ids whose html field was stored raw
 
-  function flushUnsafe() {
-    if (unsafe.size === 0) return;
-    for (const id of unsafe) {
-      const { block, context } = state.findBlockAnywhere(id);
-      if (!block || typeof block.data.html !== 'string') continue;
-      const clean = sanitizeHTML(block.data.html);
-      if (clean === block.data.html) continue;
-      if (context === null) {
-        state.updateBlockData(id, { html: clean }, { silent: true });
-      } else {
-        const col = state.getBlock(context.columnsBlockId).data.columns[context.colIndex];
-        const next = col.map(b => (b.id === id ? { ...b, data: { ...b.data, html: clean } } : b));
-        state.updateColumnBlock(context.columnsBlockId, context.colIndex, next, { silent: true });
+  // Output guarantee: everything handed to the host (getJSON(), onChange/'change'
+  // payloads, getHTML()) has sanitized `html`. Blocks are immutable, so we remember
+  // which block OBJECTS are already clean; only new/edited/loaded ones are checked.
+  // Plain text and attribute-less b/i/u/em/strong/code… (the overwhelmingly common
+  // case) are recognised without DOMPurify, so this is cheap even for big documents.
+  const cleanBlocks = new WeakSet();
+  const cleanHTMLField = (html) => (isSimpleInlineHTML(html) ? html : sanitizeHTML(html));
+
+  function cleanBlockTree(b) {
+    if (cleanBlocks.has(b)) return b;
+    let out = b;
+    const d = b.data;
+    if (d) {
+      if (typeof d.html === 'string') {
+        const c = cleanHTMLField(d.html);
+        if (c !== d.html) out = { ...b, data: { ...d, html: c } };
+      }
+      if (b.type === 'columns' && Array.isArray(d.columns)) {
+        let changed = false;
+        const cols = d.columns.map((col) => col.map((sub) => {
+          const c = cleanBlockTree(sub);
+          if (c !== sub) changed = true;
+          return c;
+        }));
+        if (changed) out = { ...out, data: { ...out.data, columns: cols } };
       }
     }
+    cleanBlocks.add(out);
+    return out;
+  }
+
+  function flushUnsafe() {
     unsafe.clear();
+    const blocks = state.getBlocks();
+    let next = null;
+    for (let i = 0; i < blocks.length; i++) {
+      const c = cleanBlockTree(blocks[i]);
+      if (c !== blocks[i]) {
+        if (!next) next = blocks.slice();
+        next[i] = c;
+      }
+    }
+    if (next) state.replaceBlocksSilently(next);
   }
 
   const fireChange = debounce(() => {

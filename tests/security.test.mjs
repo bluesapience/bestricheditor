@@ -102,3 +102,111 @@ test('sanitize hook is removed even if DOMPurify throws (shared instance stays c
   DOMPurify.removeHook = rem;
   assert.equal(hooksAdded, hooksRemoved, 'hook balanced');
 });
+
+// ── data: URIs are never allowed in HTML ─────────────────────────────────────
+test('data: URIs are stripped everywhere in sanitized HTML (img, video, poster, a, svg image)', () => {
+  const payloads = [
+    '<img src="data:image/png;base64,AAAA">',
+    '<img src=" \tDATA:image/svg+xml,<svg onload=alert(1)>">',
+    '<a href="data:text/html,<script>alert(1)</script>">x</a>',
+    '<video poster="data:image/gif;base64,R0lG" src="data:video/mp4;base64,AA"></video>',
+    '<img srcset="data:image/png;base64,AA 1x, https://example.com/a.png 2x">',
+    '<svg><image href="data:image/svg+xml,<svg onload=alert(1)>"/></svg>',
+  ];
+  for (const p of payloads) {
+    for (const opts of [{}, { allowMedia: true }, { allowKaTeX: true }, { allowKaTeX: true, allowMedia: true }]) {
+      const out = sanitizeHTML(p, opts);
+      assert.doesNotMatch(out, /data:/i, p + ' ' + JSON.stringify(opts) + ' -> ' + out);
+    }
+  }
+  // http(s) and relative URLs are untouched
+  assert.match(sanitizeHTML('<img src="https://example.com/a.png"><img src="/rel.png">'), /https:\/\/example\.com\/a\.png[\s\S]*\/rel\.png/);
+});
+
+test('data: URIs: pasted HTML, BRE/BREW getHTML and getJSON never carry them', async () => {
+  const { htmlToBlocks } = await import('../src/utils/htmlToBlocks.js');
+  const pasted = htmlToBlocks('<p>x<img src="data:image/png;base64,AAAA"></p><img src="data:image/png;base64,BBBB">');
+  assert.doesNotMatch(JSON.stringify(pasted), /data:/i);
+  for (const mode of ['BRE', 'BREW']) {
+    const ed = createEditor(mount(), { mode });
+    ed.setJSON(doc([para('a', 'hi<img src="data:image/png;base64,AAAA"><a href="data:text/html,x">l</a>')]));
+    assert.doesNotMatch(ed.getHTML(), /data:/i, mode + ' getHTML');
+    assert.doesNotMatch(JSON.stringify(ed.getJSON()), /data:/i, mode + ' getJSON');
+    ed.destroy();
+  }
+});
+
+// ── getJSON()/onChange are sanitized (the host may render them) ──────────────
+const HOSTILE = 'hi<img src=x onerror=alert(1)><svg><desc><img src=x onerror=1></desc></svg><a href="javascript:alert(1)">l</a><style>.a{}</style>';
+
+test('getJSON(): html fields are sanitized, including nested column blocks and typed edits', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([
+    para('a', HOSTILE),
+    { id: 'c', type: 'columns', data: { columns: [[para('x', HOSTILE)], [para('y', 'clean <b>bold</b>')]] } },
+    { id: 'h', type: 'heading', data: { level: 2, html: HOSTILE } },
+  ]));
+  const json = JSON.stringify(ed.getJSON());
+  assert.doesNotMatch(json, /onerror|javascript:|<style|<svg/i, json);
+  assert.match(json, /hi/, 'text survives');
+  assert.match(json, /<b>bold<\/b>/, 'harmless markup survives');
+  // typed edits too
+  const field = host.querySelector('[data-bre-field]');
+  field.innerHTML = HOSTILE;
+  field.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.doesNotMatch(JSON.stringify(ed.getJSON()), /onerror|javascript:|<style/i);
+  ed.destroy();
+});
+
+test('getJSON(): same object back when nothing changed (no repeated work), new object only after an edit', () => {
+  const ed = createEditor(mount(), { mode: 'BRE' });
+  ed.setJSON(doc([para('a', HOSTILE), para('b', 'plain')]));
+  const first = ed.getJSON();
+  const second = ed.getJSON();
+  assert.equal(second, first, 'stable identity: cleaned once, cached');
+  assert.equal(second.blocks[1], first.blocks[1]);
+  ed.destroy();
+});
+
+test('getJSON(): stays fast on a big document of simple markup (no DOMPurify for <b>/<i>/plain text)', () => {
+  const ed = createEditor(mount(), { mode: 'BRE' });
+  ed.setJSON(doc(Array.from({ length: 5000 }, (_, i) => para('b' + i, i % 2 ? 'x <b>' + i + '</b> y' : 'plain ' + i))));
+  const t = performance.now();
+  const j = ed.getJSON();
+  const ms = performance.now() - t;
+  assert.equal(j.blocks.length, 5000);
+  assert.ok(ms < 150, 'first getJSON took ' + ms.toFixed(1) + ' ms');
+  const t2 = performance.now();
+  ed.getJSON();
+  assert.ok(performance.now() - t2 < 10, 'repeat call is ~free');
+  ed.destroy();
+});
+
+test("'change' payloads are sanitized too, and undo cannot resurrect raw html into getJSON()", async () => {
+  const host = mount();
+  let payload = null;
+  const ed = createEditor(host, { mode: 'BRE', onChange: (d) => { payload = d; } });
+  ed.setJSON(doc([para('a', 'x')]));
+  const field = host.querySelector('[data-bre-field]');
+  field.innerHTML = HOSTILE;
+  field.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await tick(350);
+  assert.ok(payload);
+  assert.doesNotMatch(JSON.stringify(payload), /onerror|javascript:|<style/i, 'onChange payload');
+  // type more (raw), then undo back to the previous raw snapshot: output still clean
+  field.innerHTML = HOSTILE + ' more';
+  field.dispatchEvent(new window.Event('input', { bubbles: true }));
+  field.dispatchEvent(Object.assign(new window.Event('keydown', { bubbles: true, cancelable: true }), { key: 'z', metaKey: true }));
+  assert.doesNotMatch(JSON.stringify(ed.getJSON()), /onerror|javascript:|<style/i, 'after undo');
+  ed.destroy();
+});
+
+test('BREW getJSON() is sanitized for hostile loaded html', () => {
+  const ed = createEditor(mount(), { mode: 'BREW' });
+  ed.setJSON(doc([para('a', HOSTILE), para('b', 'ok <i>fine</i>')]));
+  const json = JSON.stringify(ed.getJSON());
+  assert.doesNotMatch(json, /onerror|javascript:|<style|<svg/i, json);
+  assert.match(json, /<i>fine<\/i>/);
+  ed.destroy();
+});
