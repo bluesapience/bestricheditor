@@ -355,11 +355,13 @@ test('BREW: dialogs open next to what they edit, not at the editor corner', () =
   dlg.querySelector('.bre-brew-link-cancel').click();
   // far-right anchors are clamped inside the editor
   fig.getBoundingClientRect = () => ({ top: 300, bottom: 420, left: 840, right: 900, width: 60, height: 120 });
+  const origOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return 280; } });
   ev(fig, 'dblclick');
   const dlg2 = host.querySelector('.bre-brew-media-dialog');
   assert.equal(dlg2.style.left, '520px', 'clamped: 800 - 280');
-  delete HTMLElement.prototype.offsetWidth;
+  if (origOffsetWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', origOffsetWidth);
+  else delete HTMLElement.prototype.offsetWidth;
   ed.destroy();
 });
 
@@ -455,4 +457,22 @@ test('BREW: media controls float on the top-left while selected/hovered (CSS con
   assert.match(css, /figure\[data-bre-selected\] \.bre-media-controls:not\(\[hidden\]\)/);
   assert.match(css, /figure:hover \.bre-media-controls:not\(\[hidden\]\)/);
   assert.match(css, /\.bre-media-controls\s*\{\s*display:\s*none/);
+});
+
+test('BREW: formula dialog spans its block (top-left corner, block width)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x^2', displayMode: true } }]));
+  host.querySelector('.bre-editor').getBoundingClientRect = () => ({ top: 100, bottom: 900, left: 50, right: 850, width: 800, height: 800 });
+  const f = host.querySelector('[data-bre-type=\"formula\"]');
+  const block = f.closest('p') || f;
+  block.getBoundingClientRect = () => ({ top: 160, bottom: 200, left: 50, right: 850, width: 800, height: 40 });
+  f.getBoundingClientRect = () => ({ top: 170, bottom: 190, left: 300, right: 340, width: 40, height: 20 });
+  ev(f, 'click');
+  const dlg = host.querySelector('.bre-brew-link-dialog');
+  assert.ok(dlg);
+  assert.equal(dlg.style.width, '800px', 'block width, not the tiny formula width');
+  assert.equal(dlg.style.top, '60px');
+  assert.equal(dlg.style.left, '0px');
+  ed.destroy();
 });

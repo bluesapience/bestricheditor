@@ -872,7 +872,7 @@ export function createBrewEditor(container, options = {}) {
     if (atCorner) dialog.style.width = Math.min(Math.max(r.width, 280), rootRect.width || r.width) + 'px';
     // atCorner: dialog's top-left sits on the anchor's top-left; otherwise just below it.
     const top = atCorner ? r.top - rootRect.top : r.bottom - rootRect.top + 6;
-    const maxLeft = Math.max(0, rootRect.width - dialog.offsetWidth);
+    const maxLeft = Math.max(0, rootRect.width - (dialog.offsetWidth || 0));
     const left = Math.max(0, Math.min(r.left - rootRect.left, maxLeft));
     dialog.style.top = top + 'px';
     dialog.style.left = left + 'px';
@@ -1370,6 +1370,13 @@ export function createBrewEditor(container, options = {}) {
     if (selectedBlockEl && e.target !== selectedBlockEl) clearBlockSelection();
   });
 
+  /** The direct child of the surface that contains `el` (or `el` itself). */
+  function topLevelBlockOf(el) {
+    let n = el;
+    while (n && n.parentNode && n.parentNode !== surface) n = n.parentNode;
+    return n && n.parentNode === surface ? n : el;
+  }
+
   function openFormulaDialog(formulaEl) {
     openDialog({
       className: 'bre-brew-link-dialog',
@@ -1388,7 +1395,9 @@ export function createBrewEditor(container, options = {}) {
         });
       },
       onRemove: () => removeBlockEl(formulaEl),
-      anchor: formulaEl,
+      // Span the formula's whole block (an inline formula is only a few px wide).
+      anchor: topLevelBlockOf(formulaEl),
+      atCorner: true,
     });
   }
 
