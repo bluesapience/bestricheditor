@@ -394,3 +394,64 @@ test('BREW: every media block has Edit / Remove buttons (works for iframe video,
   for (const c of host.querySelectorAll('.bre-media-controls')) assert.ok(c.hidden);
   ed.destroy();
 });
+
+// ── BREW: adding a line after a non-text last block ──────────────────────────
+test('BREW: clicking empty space below a non-text last block adds a paragraph', async () => {
+  for (const last of [
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 't', type: 'table', data: { rows: [['a'], ['b']] } },
+    { id: 'h', type: 'divider', data: {} },
+    { id: 'c', type: 'code', data: { code: 'x', language: '' } },
+  ]) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BREW' });
+    ed.setJSON(doc([{ id: 'p', type: 'paragraph', data: { html: 'text' } }, last]));
+    const surface = host.querySelector('.bre-brew-surface');
+    ev(surface, 'click'); // target === surface: the blank area
+    await tick(5);
+    const types = brewTypes(ed);
+    assert.deepEqual(types, ['paragraph', last.type, 'paragraph'], last.type + ' → new trailing paragraph');
+    assert.equal(surface.lastElementChild.nodeName, 'P');
+    ed.destroy();
+  }
+});
+
+test('BREW: clicking below a text last block does not pile up empty paragraphs', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([{ id: 'p', type: 'paragraph', data: { html: 'text' } }]));
+  const surface = host.querySelector('.bre-brew-surface');
+  for (let i = 0; i < 3; i++) ev(surface, 'click');
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['paragraph']);
+  ed.destroy();
+});
+
+test('BREW: ArrowDown on a selected last block creates the next line; between blocks it selects/moves', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([
+    { id: 'p', type: 'paragraph', data: { html: 'top' } },
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 'h', type: 'divider', data: {} },
+  ]));
+  const surface = host.querySelector('.bre-brew-surface');
+  const fig = surface.querySelector('figure');
+  ev(fig, 'click');
+  ev(fig, 'keydown', { key: 'ArrowDown' }); // next is the divider (non-text): selects it
+  const hr = surface.querySelector('hr');
+  assert.ok(hr.hasAttribute('data-bre-selected'));
+  ev(hr, 'keydown', { key: 'ArrowDown' }); // divider is last: new paragraph
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['paragraph', 'image', 'divider', 'paragraph']);
+  ed.destroy();
+});
+
+test('BREW: media controls float on the top-left while selected/hovered (CSS contract)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../src/bre.css', import.meta.url), 'utf8');
+  assert.match(css, /\.bre-media-controls\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;[^}]*inset-inline-start:\s*0/);
+  assert.match(css, /figure\[data-bre-selected\] \.bre-media-controls:not\(\[hidden\]\)/);
+  assert.match(css, /figure:hover \.bre-media-controls:not\(\[hidden\]\)/);
+  assert.match(css, /\.bre-media-controls\s*\{\s*display:\s*none/);
+});

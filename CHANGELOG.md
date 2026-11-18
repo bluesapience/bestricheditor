@@ -30,6 +30,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- BREW: you can add a line at the end of the document when the last block is an image, audio, video, table, divider or code block — click the empty space below it, or press `↓` on the selected block (also selects/moves between neighbouring blocks).
+- BREW: media **Edit / Remove** buttons now float over the block's top-left corner when it is selected or hovered (instead of sitting permanently underneath).
 - BREW: media dialog opens with its top-left corner on the block's top-left corner. YouTube/Vimeo embeds (iframes) and native `<video>` (double-click = fullscreen) couldn't be selected or edited by click, so every image/audio/video block now has **Edit** and **Remove** buttons under it (hidden in read-only; never part of `getJSON`/`getHTML`).
 - BREW: link, media and formula dialogs opened at the editor's top-left corner; they now appear just below the element or selection they edit, clamped inside the editor.
 - BREW: captions under image/audio/video are editable inline again (click and type; Enter commits), with a placeholder when empty; they lock in read-only mode.

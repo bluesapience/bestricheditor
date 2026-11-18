@@ -1178,8 +1178,54 @@ export function createBrewEditor(container, options = {}) {
 
   // ── Surface click: links, table controls, media, formulas ───────────────────
 
+  // ── Add a line after a non-text last block ─────────────────────────────────
+  const CARET_TAGS = /^(P|H[1-6]|UL|OL|BLOCKQUOTE)$/;
+  const NON_TEXT_TYPES = new Set(['image', 'audio', 'video', 'table', 'divider', 'code']);
+  /** A block you can put the caret in and type after (not media/table/divider/code). */
+  const isTextBlock = (el) => !!el && CARET_TAGS.test(el.nodeName) && !NON_TEXT_TYPES.has(el.getAttribute('data-bre-type') || '');
+
+  function placeCaret(el, atEnd) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(!atEnd);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  /**
+   * Clicking the empty space below the last block: if the document ends in
+   * something you can't type after (image, table, divider, code…), add a fresh
+   * paragraph there; otherwise just put the caret at the end.
+   */
+  function focusEnd() {
+    clearBlockSelection();
+    surface.focus();
+    const last = surface.lastElementChild;
+    if (isTextBlock(last)) {
+      placeCaret(last, true);
+      return;
+    }
+    appendParagraphAtEnd();
+  }
+
+  function appendParagraphAtEnd() {
+    const before = surface.lastElementChild;
+    placeCaret(surface, true);
+    try { document.execCommand('insertHTML', false, '<p><br></p>'); } catch (_) { /* fall back */ }
+    if (surface.lastElementChild === before) { // no native insert (or nothing happened)
+      const p = document.createElement('p');
+      p.appendChild(document.createElement('br'));
+      surface.appendChild(p);
+    }
+    placeCaret(surface.lastElementChild, false);
+    scheduleChange();
+  }
+
   listen(surface, 'click', (e) => {
     if (readOnly) return; // links navigate natively, nothing else is interactive
+    if (e.target === surface) { focusEnd(); return; }
 
     const anchorEl = e.target.closest('a');
     if (anchorEl && surface.contains(anchorEl)) {
@@ -1299,6 +1345,19 @@ export function createBrewEditor(container, options = {}) {
     } else if (e.key === 'Escape') {
       e.preventDefault();
       clearBlockSelection();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const el = selectedBlockEl;
+      const next = e.key === 'ArrowDown' ? el.nextElementSibling : el.previousElementSibling;
+      clearBlockSelection();
+      surface.focus();
+      if (!next) {
+        if (e.key === 'ArrowDown') appendParagraphAtEnd(); else placeCaret(el, false);
+      } else if (isTextBlock(next)) {
+        placeCaret(next, e.key === 'ArrowUp');
+      } else {
+        selectBlockEl(next); // another non-text block: select it
+      }
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (['image', 'audio', 'video'].includes(selectedBlockEl.getAttribute('data-bre-type'))) showMediaDialog(selectedBlockEl);

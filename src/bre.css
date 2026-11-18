@@ -219,6 +219,27 @@
   font-weight: bold;
 }
 
+/* BREW media Edit/Remove: float over the block's top-left corner while it is
+   selected, hovered or focused (iframes can't be click-selected, so hover counts). */
+.bre-brew-surface figure[data-bre-type] {
+  position: relative;
+}
+.bre-media-controls {
+  display: none;
+  position: absolute;
+  top: 0;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid;
+}
+.bre-brew-surface figure[data-bre-selected] .bre-media-controls:not([hidden]),
+.bre-brew-surface figure:hover .bre-media-controls:not([hidden]),
+.bre-brew-surface figure:focus-within .bre-media-controls:not([hidden]) {
+  display: flex;
+}
+
 /* A selected non-text block (image, audio, video, divider…): Backspace/Delete removes it. */
 .bre-editor [data-bre-selected] {
   outline: 2px solid Highlight;

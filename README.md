@@ -296,8 +296,9 @@ Buttons shown in the floating toolbar are context-aware — only the marks suppo
 |---|---|
 | Select an image / audio / video / divider | Click it (outline, `data-bre-selected`) |
 | Delete it | `Backspace` / `Delete` (undoable with `⌘Z`); `Esc` deselects |
-| Edit media source, alt, caption | **Edit** button under the block (works for embedded video), `Enter` on the selected block, or double-click. The dialog also has **Remove**; there is a **Remove** button under the block too |
+| Edit media source, alt, caption | **Edit** button that floats over the block's top-left corner when it is selected or hovered (works for embedded video), `Enter` on the selected block, or double-click. The dialog also has **Remove**; there is a **Remove** button under the block too |
 | Delete a table | **Delete table** button in the table controls |
+| Add a line after a non-text last block | Click the empty space below it, or press `↓` on a selected block |
 | Edit / remove a formula | Click it → dialog with **Remove** |
 
 ## BREW — WYSIWYG keyboard shortcuts
