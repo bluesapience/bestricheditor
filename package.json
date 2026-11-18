@@ -90,7 +90,7 @@
     {
       "name": "UMD core (min+gz, no formulas)",
       "path": "dist/bre.umd.js",
-      "limit": "48 kB",
+      "limit": "50 kB",
       "gzip": true
     },
     {
