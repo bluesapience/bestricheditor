@@ -27,19 +27,37 @@ function isSafeIframeSrc(src) {
  * @param {string} html
  * @param {{ allowKaTeX?: boolean, allowMedia?: boolean }} [options]
  */
-export function sanitizeHTML(html, { allowKaTeX = false, allowMedia = false } = {}) {
-  if (typeof html !== 'string') return '';
+export function sanitizeHTML(html, opts = {}) {
+  return runSanitize(html, opts, false);
+}
+
+/**
+ * Same policy as sanitizeHTML, but returns a DocumentFragment so callers can
+ * append it directly — one parse instead of DOMPurify's parse + innerHTML's.
+ */
+export function sanitizeToFragment(html, opts = {}) {
+  return runSanitize(html, opts, true);
+}
+
+function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFragment) {
+  if (typeof html !== 'string') html = '';
+  const extra = asFragment ? { RETURN_DOM_FRAGMENT: true } : null;
 
   // Fast path: markup needs a '<' to create any element or attribute. Entity
   // text (&lt;script&gt;) only ever decodes to text, so a string with no '<'
   // is already safe and skips the DOMPurify parse entirely.
-  if (html.indexOf('<') === -1) return html;
+  if (html.indexOf('<') === -1) {
+    if (!asFragment) return html;
+    const f = document.createDocumentFragment();
+    f.appendChild(document.createTextNode(html.replace(/&(amp|lt|gt|quot|#39);/g, (m, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[e])));
+    return f;
+  }
 
   // Inline styles are never carried by the editor (it has no styling opinions
   // and style attributes can smuggle url()/expression()). KaTeX output is the
   // one exception — it needs style for layout — and is scrubbed by a hook below.
   if (!allowKaTeX && !allowMedia) {
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'] });
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], ...extra });
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
@@ -71,6 +89,7 @@ export function sanitizeHTML(html, { allowKaTeX = false, allowMedia = false } = 
     USE_PROFILES: { html: true, ...(allowKaTeX ? { svg: true, mathMl: true } : {}) },
     ADD_ATTR: addAttr,
     ADD_TAGS: addTags,
+    ...extra,
   });
 
   DOMPurify.removeHook('afterSanitizeAttributes');

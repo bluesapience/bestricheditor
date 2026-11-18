@@ -35,6 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 - **Performance (BRE)**: structural-sharing state (O(1) undo snapshots, O(1) block lookup), no sanitizing on the keystroke path (lazy, per touched block), per-block HTML cache for `getHTML()`, one shared drag handle (2 elements per block instead of ~12), plain-text fast path (no DOMPurify for markup-free text), identity-based diff on undo/redo.
+- **BREM**: block→Markdown conversion has a DOM-free fast path for simple inline markup and the preview is built from a single sanitized fragment (5,000-block `setJSON`: ~2.6 s → ~0.4 s in jsdom).
 - **BREW**: incremental block model; `getJSON` / `getHTML` no longer re-walk the DOM.
 - **Styling policy**: the stylesheet is now structural-only (no colors, fonts, sizes, spacing, radii, shadows or variables); everything inherits from the host. Floating UI uses system colors (`Canvas`, `CanvasText`, `Highlight`) so it is legible on any page.
 - IDs use Web Crypto (64 bits) instead of `Math.random().slice(2, 10)`.

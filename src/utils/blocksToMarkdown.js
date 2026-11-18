@@ -107,6 +107,55 @@ function nodeToMd(node, inStrong) {
   }
 }
 
+// ── DOM-free fast path ─────────────────────────────────────────────────────
+// Handles the overwhelmingly common shape: attribute-free <strong>/<b>/<em>/
+// <i>/<u>/<s>/<del>/<code> around plain text, no entities. Builds a tiny tree
+// of node-like objects and reuses nodeToMd, so output is identical to the DOM
+// path. Anything else (links, attributes, entities, unbalanced tags) returns
+// null and takes the sanitizing DOMParser path.
+const SIMPLE_TOKEN = /<(\/?)(strong|b|em|i|u|s|del|strike|code)>|([^<&]+)/gi;
+
+function fakeEl(name) {
+  const el = {
+    nodeType: 1,
+    nodeName: name.toUpperCase(),
+    childNodes: [],
+    getAttribute: () => null,
+    classList: null,
+  };
+  Object.defineProperty(el, 'textContent', {
+    get() { return el.childNodes.map(c => (c.nodeType === 3 ? c.nodeValue : c.textContent)).join(''); },
+  });
+  return el;
+}
+
+function simpleInlineToMd(html) {
+  const root = fakeEl('body');
+  const stack = [root];
+  let pos = 0;
+  SIMPLE_TOKEN.lastIndex = 0;
+  let m;
+  while ((m = SIMPLE_TOKEN.exec(html)) !== null) {
+    if (m.index !== pos) return null; // gap = something we don't handle
+    pos = SIMPLE_TOKEN.lastIndex;
+    const cur = stack[stack.length - 1];
+    if (m[3] !== undefined) {
+      cur.childNodes.push({ nodeType: 3, nodeValue: m[3] });
+    } else if (m[1]) {
+      if (stack.length < 2 || stack[stack.length - 1].nodeName !== m[2].toUpperCase()) return null;
+      stack.pop();
+    } else {
+      const el = fakeEl(m[2]);
+      cur.childNodes.push(el);
+      stack.push(el);
+    }
+  }
+  if (pos !== html.length || stack.length !== 1) return null;
+  let out = '';
+  for (const c of root.childNodes) out += nodeToMd(c, false);
+  return out.trim();
+}
+
 /**
  * Inline HTML (as stored in block.data.html) -> inline markdown.
  * @param {string} html
@@ -115,6 +164,8 @@ function nodeToMd(node, inStrong) {
 export function inlineHTMLToMarkdown(html) {
   if (!html) return '';
   if (!/[<&]/.test(html)) return escText(html.replace(/ /g, ' ').replace(/[\r\n]+/g, ' '));
+  const fast = simpleInlineToMd(html);
+  if (fast !== null) return fast;
   const clean = sanitizeHTML(html);
   if (!_parser) _parser = new DOMParser();
   const body = _parser.parseFromString(`<body>${clean}`, 'text/html').body;

@@ -5,7 +5,7 @@
  * Note: programmatic setJSON()/setHTML() never fire 'change' — only user edits do.
  */
 import { generateId } from '../utils/id.js';
-import { sanitizeHTML } from '../utils/sanitize.js';
+import { sanitizeHTML, sanitizeToFragment } from '../utils/sanitize.js';
 import { parseMarkdown, markdownToBlocks } from '../utils/markdown.js';
 import { blocksToMarkdown } from '../utils/blocksToMarkdown.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
@@ -109,7 +109,7 @@ export function createBremEditor(container, options = {}) {
 
   function renderPreview() {
     if (!markdown.trim()) { preview.replaceChildren(); return; } // :empty -> placeholder
-    preview.innerHTML = sanitizeHTML(parseMarkdown(markdown), { allowKaTeX: true, allowMedia: true });
+    preview.replaceChildren(sanitizeToFragment(parseMarkdown(markdown), { allowKaTeX: true, allowMedia: true }));
     // KaTeX loads lazily — re-render once it arrives if the text has math.
     if (!getKaTeX() && markdown.includes('$')) {
       const snapshot = markdown;
