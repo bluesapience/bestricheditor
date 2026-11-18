@@ -327,3 +327,23 @@ test('BRE: no hard-coded styling — stylesheet source has no colors/fonts/vars'
   assert.doesNotMatch(css, /font-family\s*:\s*(?!inherit)/i, 'no font families');
   assert.doesNotMatch(css, /box-shadow|border-radius|font-size\s*:\s*[\d.]/i, 'no decorative rules');
 });
+
+// Guards against tree-shaking dropping block registration (sideEffects flag).
+test('dist bundle: blocks are registered and the editor renders (skips if not built)', async () => {
+  const { existsSync } = await import('node:fs');
+  const url = new URL('../dist/bre.esm.js', import.meta.url);
+  if (!existsSync(url)) return;
+  const { createEditor: dist } = await import(url.href);
+  const host = mount();
+  const ed = dist(host, { mode: 'BRE', virtualize: false });
+  ed.setJSON(doc([
+    { id: 'h', type: 'heading', data: { level: 1, html: 'T' } },
+    para('p', 'x'),
+    { id: 'c', type: 'columns', data: { columns: [[para('a', '1')], [para('b', '2')]] } },
+    { id: 't', type: 'table', data: { rows: [['a'], ['b']] } },
+    { id: 'v', type: 'video', data: { src: 'https://youtu.be/abc' } },
+    { id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } },
+  ]));
+  assert.equal(host.querySelectorAll('.bre-block').length, 8);
+  ed.destroy();
+});

@@ -72,7 +72,9 @@
   "unpkg": "dist/bre.umd.js",
   "jsdelivr": "dist/bre.umd.js",
   "sideEffects": [
-    "**/*.css"
+    "**/*.css",
+    "./src/**/*.js",
+    "./dist/**/*.js"
   ],
   "engines": {
     "node": ">=18"
@@ -81,7 +83,7 @@
     {
       "name": "ESM entry (min+gz)",
       "path": "dist/bre.esm.js",
-      "limit": "34 kB",
+      "limit": "37 kB",
       "gzip": true
     },
     {
