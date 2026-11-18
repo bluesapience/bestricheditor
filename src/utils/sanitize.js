@@ -30,8 +30,16 @@ function isSafeIframeSrc(src) {
 export function sanitizeHTML(html, { allowKaTeX = false, allowMedia = false } = {}) {
   if (typeof html !== 'string') return '';
 
+  // Fast path: markup needs a '<' to create any element or attribute. Entity
+  // text (&lt;script&gt;) only ever decodes to text, so a string with no '<'
+  // is already safe and skips the DOMPurify parse entirely.
+  if (html.indexOf('<') === -1) return html;
+
+  // Inline styles are never carried by the editor (it has no styling opinions
+  // and style attributes can smuggle url()/expression()). KaTeX output is the
+  // one exception — it needs style for layout — and is scrubbed by a hook below.
   if (!allowKaTeX && !allowMedia) {
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'] });
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
@@ -43,15 +51,21 @@ export function sanitizeHTML(html, { allowKaTeX = false, allowMedia = false } = 
     addAttr.push('sandbox', 'referrerpolicy', 'allowfullscreen', 'loading', 'controls');
   }
 
-  // Hook: strip iframe src unless it matches our embed allowlist.
-  const hook = allowMedia ? (node) => {
-    if (node.tagName === 'IFRAME') {
+  // Hook: strip iframe src unless it matches our embed allowlist, and drop
+  // style attributes carrying anything that can load or execute (url(), expression(), @import…).
+  const hook = (node) => {
+    if (allowMedia && node.tagName === 'IFRAME') {
       const src = node.getAttribute('src') || '';
       if (!isSafeIframeSrc(src)) node.removeAttribute('src');
     }
-  } : null;
+    if (node.hasAttribute && node.hasAttribute('style')) {
+      if (/url\s*\(|expression\s*\(|javascript:|@import|behavior\s*:|-moz-binding/i.test(node.getAttribute('style'))) {
+        node.removeAttribute('style');
+      }
+    }
+  };
 
-  if (hook) DOMPurify.addHook('afterSanitizeAttributes', hook);
+  DOMPurify.addHook('afterSanitizeAttributes', hook);
 
   const result = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true, ...(allowKaTeX ? { svg: true, mathMl: true } : {}) },
@@ -59,7 +73,7 @@ export function sanitizeHTML(html, { allowKaTeX = false, allowMedia = false } = 
     ADD_TAGS: addTags,
   });
 
-  if (hook) DOMPurify.removeHook('afterSanitizeAttributes');
+  DOMPurify.removeHook('afterSanitizeAttributes');
 
   return result;
 }

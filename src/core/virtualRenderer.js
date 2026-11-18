@@ -18,41 +18,12 @@
  *
  * Usage: createVirtualRenderer(container, state)
  */
-import { blockRegistry } from './blockRegistry.js';
+import { createBlockEl, registerSubBlocks as registerSubs } from './blockEl.js';
 
 const OVERSCAN = 30;
 const DEFAULT_BLOCK_HEIGHT = 56; // px estimate for unrendered blocks
 
-const DRAG_HANDLE_SVG = `<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <circle cx="3" cy="2" r="1.5"/>
-  <circle cx="7" cy="2" r="1.5"/>
-  <circle cx="3" cy="6" r="1.5"/>
-  <circle cx="7" cy="6" r="1.5"/>
-  <circle cx="3" cy="10" r="1.5"/>
-  <circle cx="7" cy="10" r="1.5"/>
-  <circle cx="3" cy="14" r="1.5"/>
-  <circle cx="7" cy="14" r="1.5"/>
-</svg>`;
-
-function createDragHandle() {
-  const handle = document.createElement('div');
-  handle.className = 'bre-drag-handle';
-  handle.setAttribute('data-bre-handle', '');
-  handle.setAttribute('aria-hidden', 'true');
-  handle.innerHTML = DRAG_HANDLE_SVG;
-  return handle;
-}
-
-function createBlockWrapper(block, contentEl) {
-  const wrapper = document.createElement('div');
-  wrapper.className = `bre-block bre-block--${block.type}`;
-  wrapper.setAttribute('data-bre-block-id', block.id);
-  wrapper.appendChild(createDragHandle());
-  wrapper.appendChild(contentEl);
-  return wrapper;
-}
-
-export function createVirtualRenderer(container, state) {
+export function createVirtualRenderer(container, state, ctx) {
   /** @type {Map<string, Element>} blockId → DOM element (visible blocks only) */
   const blockMap = new Map();
 
@@ -159,21 +130,12 @@ export function createVirtualRenderer(container, state) {
   }
 
   function renderBlockEl(block) {
-    const plugin = blockRegistry.get(block.type);
-    const contentEl = plugin.render(block);
-    return createBlockWrapper(block, contentEl);
+    return createBlockEl(block, ctx);
   }
 
   function registerSubBlocks(columnsBlock) {
-    const cols = columnsBlock.data && columnsBlock.data.columns;
-    if (!Array.isArray(cols)) return;
-    for (const col of cols) {
-      if (!Array.isArray(col)) continue;
-      for (const subBlock of col) {
-        const el = container.querySelector(`[data-bre-block-id="${subBlock.id}"]`);
-        if (el) blockMap.set(subBlock.id, el);
-      }
-    }
+    const el = blockMap.get(columnsBlock.id);
+    if (el) registerSubs(blockMap, el);
   }
 
   // ── Window calculation (O(log n) binary search) ───────────────────────────
@@ -325,7 +287,7 @@ export function createVirtualRenderer(container, state) {
     blockMap.clear();
     heightCache.clear();
     invalidatePrefix();
-    container.innerHTML = '';
+    container.textContent = '';
     container.appendChild(topSpacer);
     container.appendChild(bottomSpacer);
 
@@ -414,6 +376,9 @@ export function createVirtualRenderer(container, state) {
   function destroy() {
     detachScroll();
     unsubscribe();
+    blockMap.clear();
+    heightCache.clear();
+    container.textContent = '';
   }
 
   return {

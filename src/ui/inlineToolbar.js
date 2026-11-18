@@ -5,25 +5,26 @@
 
 import { blockRegistry } from '../core/blockRegistry.js';
 
+// Labels resolve through options.messages at build time. Glyphs use semantic
+// elements (<b>, <i>, <u>) so they inherit the host's styling.
 const MARK_DEFS = [
-  { mark: 'bold',      label: 'Bold',        html: '<b>B</b>' },
-  { mark: 'italic',    label: 'Italic',      html: '<i>I</i>' },
-  { mark: 'underline', label: 'Underline',   html: '<u>U</u>' },
-  { mark: 'code',      label: 'Inline code', html: '&lt;&gt;' },
+  { mark: 'bold',      msg: 'bold',       tag: 'b', text: 'B' },
+  { mark: 'italic',    msg: 'italic',     tag: 'i', text: 'I' },
+  { mark: 'underline', msg: 'underline',  tag: 'u', text: 'U' },
+  { mark: 'code',      msg: 'inlineCode', tag: 'code', text: '<>' },
 ];
-
-const LINK_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
 
 /**
  * @param {HTMLElement} root - editor root element
  * @param {{ handleLinkInsert: (fieldEl: HTMLElement) => void }} opts
  * @returns {{ destroy: () => void, handleMark: (mark: string) => void }}
  */
-export function createInlineToolbar(root, { handleLinkInsert }) {
+export function createInlineToolbar(root, { handleLinkInsert, messages, isReadOnly = () => false }) {
   const toolbar = document.createElement('div');
   toolbar.className = 'bre-inline-toolbar';
   toolbar.setAttribute('role', 'toolbar');
-  toolbar.setAttribute('aria-label', 'Text formatting');
+  toolbar.setAttribute('aria-label', messages.textFormatting);
+  toolbar.hidden = true;
   document.body.appendChild(toolbar);
 
   let visible = false;
@@ -130,20 +131,23 @@ export function createInlineToolbar(root, { handleLinkInsert }) {
   }
 
   function buildButtons(caps) {
-    toolbar.innerHTML = '';
+    toolbar.textContent = '';
     const marks = caps.marks ?? [];
     let hasMarkBtns = false;
 
-    MARK_DEFS.forEach(({ mark, label, html }) => {
+    MARK_DEFS.forEach(({ mark, msg, tag, text }) => {
       if (!marks.includes(mark)) return;
       hasMarkBtns = true;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'bre-inline-toolbar-btn';
       btn.dataset.mark = mark;
-      btn.setAttribute('aria-label', label);
+      btn.setAttribute('aria-label', messages[msg]);
+      btn.setAttribute('title', messages[msg]);
       btn.setAttribute('aria-pressed', 'false');
-      btn.innerHTML = html; // static literal — no user data
+      const glyph = document.createElement(tag);
+      glyph.textContent = text;
+      btn.appendChild(glyph);
       btn.addEventListener('mousedown', e => {
         e.preventDefault(); // preserve selection
         handleMark(mark);
@@ -162,8 +166,9 @@ export function createInlineToolbar(root, { handleLinkInsert }) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'bre-inline-toolbar-btn';
-      btn.setAttribute('aria-label', 'Link (Cmd+K)');
-      btn.innerHTML = LINK_ICON; // static SVG literal — no user data
+      btn.setAttribute('aria-label', messages.link);
+      btn.setAttribute('title', messages.link);
+      btn.textContent = '\u{1F517}\uFE0E'; // text-presentation link glyph
       btn.addEventListener('mousedown', e => {
         e.preventDefault();
         const fieldEl = getLinkFieldEl();
@@ -203,6 +208,7 @@ export function createInlineToolbar(root, { handleLinkInsert }) {
 
   function show(caps) {
     buildButtons(caps);
+    toolbar.hidden = false;
     toolbar.classList.add('bre-inline-toolbar--visible');
     visible = true;
     requestAnimationFrame(reposition);
@@ -210,6 +216,7 @@ export function createInlineToolbar(root, { handleLinkInsert }) {
 
   function hide() {
     toolbar.classList.remove('bre-inline-toolbar--visible');
+    toolbar.hidden = true;
     visible = false;
   }
 
@@ -217,7 +224,7 @@ export function createInlineToolbar(root, { handleLinkInsert }) {
 
   function onSelectionChange() {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) { hide(); return; }
+    if (isReadOnly() || !sel || sel.isCollapsed) { hide(); return; }
     const caps = getCaps();
     if (!caps || (!caps.marks?.length && !caps.links)) { hide(); return; }
     show(caps);
@@ -227,14 +234,21 @@ export function createInlineToolbar(root, { handleLinkInsert }) {
     if (visible) hide();
   }
 
+  // Keyboard: Escape dismisses the toolbar without losing the selection.
+  function onKeyDown(e) {
+    if (e.key === 'Escape' && visible) hide();
+  }
+
   document.addEventListener('selectionchange', onSelectionChange);
   root.addEventListener('mouseup', onSelectionChange);
   document.addEventListener('scroll', onScroll, { passive: true, capture: true });
+  root.addEventListener('keydown', onKeyDown);
 
   function destroy() {
     document.removeEventListener('selectionchange', onSelectionChange);
     root.removeEventListener('mouseup', onSelectionChange);
-    document.removeEventListener('scroll', onScroll, { passive: true, capture: true });
+    document.removeEventListener('scroll', onScroll, { capture: true });
+    root.removeEventListener('keydown', onKeyDown);
     toolbar.remove();
   }
 

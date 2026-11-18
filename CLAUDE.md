@@ -14,7 +14,7 @@ Full spec: `ABOUT.md`
 - No UI frameworks
 - Minimal dependencies — DOMPurify and KaTeX are the only allowed runtime deps
 - Build tool: **Rollup**
-- Styling: **plain CSS with CSS variables**
+- Styling: **structural CSS only — no visual styling.** No colors, fonts, sizes, spacing, radii, shadows or theme variables; everything inherits from the host page. Only functional rules (positioning, layout, visibility, placeholders) belong in `src/bre.css`.
 - HTML sanitization: **DOMPurify** on all HTML output and pasted HTML — never raw `innerHTML`
 - Math rendering: **KaTeX** for inline (`$...$`) and block (`$$...$$`) formulas
 

@@ -1,15 +1,28 @@
 /**
  * Best Rich Editor — BREW (WYSIWYG) mode
  * contenteditable surface with formatting toolbar.
+ *
+ * Model/serialization design (see D8):
+ *  - Every "unit" (a top-level surface child, or an <li> inside a top-level
+ *    <ul>/<ol>) maps to exactly one block and is cached in a WeakMap.
+ *  - A MutationObserver marks the cached unit dirty; getJSON()/getHTML() only
+ *    re-read dirty or new units and reuse everything else.
+ *  - Units carry data-bre-id (block id) and data-bre-block-id (assigned lazily,
+ *    de-duplicated when the browser clones a node on Enter).
+ *
+ * Note: programmatic setJSON()/setHTML() never fire 'change' — only user edits do.
  */
 
-import { katexReady, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
+import { loadKaTeX, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { generateId } from '../utils/id.js';
-import { debounce } from '../utils/debounce.js';
 import { escapeHTML } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { EventEmitter } from '../core/events.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
+import { markdownToBlocks } from '../utils/markdown.js';
+import { blockToHTML, isSimpleInlineHTML } from '../utils/blocksToHTML.js';
+import { cleanPastedHTML } from '../utils/pasteClean.js';
 
 // Ensure all block plugins are registered (same as editor.js)
 import '../blocks/paragraph.js';
@@ -23,11 +36,94 @@ import '../ui/columns.js';
 import '../blocks/table.js';
 import '../blocks/image.js';
 import '../blocks/audio.js';
+import '../blocks/formula.js';
 import { createVideoPlugin } from '../blocks/video.js';
 
-// ── Module-level constants ─────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_EMBED_ALLOWLIST = ['youtube.com', 'youtu.be', 'vimeo.com'];
+const CHANGE_DELAY = 400;
+
+export const DEFAULT_MESSAGES = {
+  placeholder: 'Start writing…',
+  toolbarLabel: 'Formatting',
+  surfaceLabel: 'Rich text editor',
+  blockType: 'Block type',
+  paragraph: 'Paragraph',
+  headingN: 'Heading {n}',
+  bold: 'Bold (⌘B)',
+  italic: 'Italic (⌘I)',
+  underline: 'Underline (⌘U)',
+  bulletedList: 'Bulleted list',
+  numberedList: 'Numbered list',
+  quote: 'Quote',
+  codeBlock: 'Code block',
+  divider: 'Insert divider',
+  link: 'Insert link',
+  formula: 'Insert formula',
+  table: 'Insert table',
+  image: 'Insert image',
+  audio: 'Insert audio',
+  video: 'Insert video',
+  linkDialog: 'Link',
+  mediaDialog: 'Media',
+  linkText: 'Text',
+  linkUrl: 'https://...',
+  imageUrl: 'Image URL',
+  audioUrl: 'Audio URL',
+  videoUrl: 'Video URL or YouTube/Vimeo link',
+  altText: 'Alt text',
+  caption: 'Caption (optional)',
+  save: 'Save',
+  cancel: 'Cancel',
+  remove: 'Remove',
+  formulaPrompt: 'Enter LaTeX formula:',
+  formulaEditPrompt: 'Edit LaTeX formula:',
+  imagePlaceholder: 'Click to set image URL',
+  audioPlaceholder: 'Click to set audio URL',
+  videoPlaceholder: 'Click to set video URL or paste a YouTube/Vimeo link',
+  addRow: '+ Row',
+  delRow: '− Row',
+  addCol: '+ Col',
+  delCol: '− Col',
+  tableHeader: 'Header',
+  tableCell: 'Cell',
+  invalidDocument: 'Invalid document',
+};
+
+const _warned = new Set();
+function warnOnce(key, msg) {
+  if (_warned.has(key)) return;
+  _warned.add(key);
+  console.warn('[bre] ' + msg);
+}
+
+const HEADING_TAG = /^H[1-6]$/;
+const MARKUP = /[<&]/;
+
+function escText(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Sanitize many HTML fragments with ONE DOMPurify call (per-call overhead
+ * dominates for big docs). Fragments are wrapped in <div>s; if the wrapper
+ * structure doesn't survive (a fragment tried to break out) every fragment is
+ * sanitized individually instead.
+ */
+function sanitizeBatch(htmls, options) {
+  const n = htmls.length;
+  if (n === 0) return [];
+  const t = document.createElement('template');
+  t.innerHTML = sanitizeHTML(`<div>${htmls.join('</div><div>')}</div>`, options); // sanitized
+  const kids = Array.from(t.content.children);
+  if (kids.length === n && kids.every(k => k.nodeName === 'DIV')) {
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = kids[i].innerHTML;
+    return out;
+  }
+  return htmls.map(h => sanitizeHTML(h, options));
+}
 
 /**
  * Try to extract a safe embed URL for YouTube/Vimeo (mirrors video.js logic).
@@ -38,14 +134,10 @@ function brewGetEmbedUrl(src, embedAllowlist) {
   try {
     const url = new URL(src);
     const host = url.hostname.replace(/^www\./, '');
-    const allowed = (embedAllowlist || []).some(
-      d => host === d || host.endsWith('.' + d)
-    );
+    const allowed = (embedAllowlist || []).some(d => host === d || host.endsWith('.' + d));
     if (!allowed) return null;
     if (host === 'youtube.com' || host === 'youtu.be') {
-      const id = host === 'youtu.be'
-        ? url.pathname.slice(1).split('?')[0]
-        : url.searchParams.get('v');
+      const id = host === 'youtu.be' ? url.pathname.slice(1).split('?')[0] : url.searchParams.get('v');
       return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
     }
     if (host === 'vimeo.com') {
@@ -58,339 +150,29 @@ function brewGetEmbedUrl(src, embedAllowlist) {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/**
- * Convert a single block to its surface HTML representation.
- * Returns a string of HTML for that block (without list wrapper).
- */
-function blockToSurfaceHTMLSnippet(block, embedAllowlist) {
-  const id = block.id || generateId();
-  switch (block.type) {
-    case 'paragraph': {
-      const html = (block.data && block.data.html != null)
-        ? sanitizeHTML(block.data.html)
-        : escapeHTML((block.data && block.data.text) || '');
-      return `<p data-bre-type="paragraph" data-bre-id="${id}">${html || '<br>'}</p>`;
-    }
-    case 'heading': {
-      const level = (block.data && block.data.level) || 1;
-      const html = (block.data && block.data.html != null)
-        ? sanitizeHTML(block.data.html)
-        : escapeHTML((block.data && block.data.text) || '');
-      return `<h${level} data-bre-type="heading" data-bre-level="${level}" data-bre-id="${id}">${html || '<br>'}</h${level}>`;
-    }
-    case 'quote': {
-      const html = (block.data && block.data.html != null)
-        ? sanitizeHTML(block.data.html)
-        : escapeHTML((block.data && block.data.text) || '');
-      return `<blockquote data-bre-type="quote" data-bre-id="${id}">${html || '<br>'}</blockquote>`;
-    }
-    case 'code': {
-      const lang = escapeHTML((block.data && block.data.language) || '');
-      const code = escapeHTML((block.data && block.data.code) || '');
-      return `<pre data-bre-type="code" data-bre-lang="${lang}" data-bre-id="${id}"><code>${code || '<br>'}</code></pre>`;
-    }
-    case 'bulleted_list': {
-      const html = (block.data && block.data.html != null)
-        ? sanitizeHTML(block.data.html)
-        : escapeHTML((block.data && block.data.text) || '');
-      return `<li data-bre-type="bulleted_list" data-bre-id="${id}">${html || '<br>'}</li>`;
-    }
-    case 'numbered_list': {
-      const html = (block.data && block.data.html != null)
-        ? sanitizeHTML(block.data.html)
-        : escapeHTML((block.data && block.data.text) || '');
-      return `<li data-bre-type="numbered_list" data-bre-id="${id}">${html || '<br>'}</li>`;
-    }
-    case 'divider': {
-      return `<hr data-bre-type="divider" data-bre-id="${id}">`;
-    }
-    case 'formula': {
-      const latex = (block.data && block.data.latex) || '';
-      const katex = getKaTeX();
-      if (!katex) return `<p data-bre-id="${id}"><em>[Formula: ${escapeHTML(latex)}]</em></p>`;
-      try {
-        const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
-        const safe = sanitizeHTML(rendered, { allowKaTeX: true });
-        const escapedLatex = latex.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-        return `<p data-bre-id="${id}"><span data-bre-type="formula" data-bre-latex="${escapedLatex}" contenteditable="false">${safe}</span></p>`;
-      } catch {
-        return `<p data-bre-id="${id}"><em>[Formula: ${escapeHTML(latex)}]</em></p>`;
-      }
-    }
-    case 'table': {
-      const rows = (block.data && Array.isArray(block.data.rows)) ? block.data.rows : [['Header 1', 'Header 2'], ['', '']];
-      const [headerRow, ...bodyRows] = rows;
-      const makeCell = (tag, content, rowIdx, colIdx) => {
-        const ph = rowIdx === 0 ? 'Header' : 'Cell';
-        return `<${tag} class="bre-table-cell" contenteditable="true" data-bre-table-row="${rowIdx}" data-bre-table-col="${colIdx}" data-bre-placeholder="${ph}">${escapeHTML(String(content))}</${tag}>`;
-      };
-      const thHTML = headerRow
-        ? `<thead><tr>${headerRow.map((c, ci) => makeCell('th', c, 0, ci)).join('')}</tr></thead>`
-        : '';
-      const tbHTML = bodyRows.length > 0
-        ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1, ci)).join('')}</tr>`).join('')}</tbody>`
-        : '';
-      const controls = `<div class="bre-table-controls"><button type="button" class="bre-table-btn" data-bre-table-action="add-row">+ Row</button><button type="button" class="bre-table-btn" data-bre-table-action="del-row">− Row</button><button type="button" class="bre-table-btn" data-bre-table-action="add-col">+ Col</button><button type="button" class="bre-table-btn" data-bre-table-action="del-col">− Col</button></div>`;
-      return `<div data-bre-type="table" data-bre-id="${id}" contenteditable="false" class="bre-table-wrapper"><table class="bre-table">${thHTML}${tbHTML}</table>${controls}</div>`;
-    }
-    case 'image': {
-      const src = (block.data && block.data.src) || '';
-      const alt = (block.data && block.data.alt) || '';
-      const caption = (block.data && block.data.caption) || '';
-      const inner = src
-        ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(alt)}" loading="lazy">`
-        : `<div class="bre-image-placeholder">Click to set image URL</div>`;
-      const cap = `<figcaption class="bre-media-caption">${escapeHTML(caption)}</figcaption>`;
-      return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(alt)}" data-bre-caption="${escapeHTML(caption)}" contenteditable="false" class="bre-image-block">${inner}${cap}</figure>`;
-    }
-    case 'audio': {
-      const src = (block.data && block.data.src) || '';
-      const caption = (block.data && block.data.caption) || '';
-      const inner = src
-        ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
-        : `<div class="bre-audio-placeholder">Click to set audio URL</div>`;
-      const cap = `<figcaption class="bre-media-caption">${escapeHTML(caption)}</figcaption>`;
-      return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(caption)}" contenteditable="false" class="bre-audio-block">${inner}${cap}</figure>`;
-    }
-    case 'video': {
-      const src = (block.data && block.data.src) || '';
-      const caption = (block.data && block.data.caption) || '';
-      const embedUrl = brewGetEmbedUrl(src, embedAllowlist || DEFAULT_EMBED_ALLOWLIST);
-      let inner;
-      if (!src) {
-        inner = `<div class="bre-video-placeholder">Click to set video URL or paste a YouTube/Vimeo link</div>`;
-      } else if (embedUrl) {
-        inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
-      } else {
-        inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
-      }
-      const cap = `<figcaption class="bre-media-caption">${escapeHTML(caption)}</figcaption>`;
-      return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(caption)}" contenteditable="false" class="bre-video-block">${inner}${cap}</figure>`;
-    }
-    case 'columns': {
-      return `<p data-bre-type="paragraph" data-bre-id="${id}"><em>[Columns block — edit in BRE mode]</em></p>`;
-    }
-    default: {
-      // Unknown block types rendered as placeholder paragraph
-      return `<p data-bre-type="paragraph" data-bre-id="${id}"><em>[Unknown block: ${escapeHTML(block.type)}]</em></p>`;
-    }
-  }
+function cloneBlock(b) {
+  const data = b.data ? { ...b.data } : {};
+  if (Array.isArray(data.rows)) data.rows = data.rows.map(r => (Array.isArray(r) ? r.slice() : r));
+  return { ...b, data };
 }
 
-/**
- * Convert an array of blocks to surface innerHTML (with UL/OL grouping).
- */
-function blocksToSurfaceHTML(blocks, embedAllowlist) {
-  const parts = [];
-  let i = 0;
-  while (i < blocks.length) {
-    const block = blocks[i];
-
-    if (block.type === 'bulleted_list') {
-      const items = [];
-      while (i < blocks.length && blocks[i].type === 'bulleted_list') {
-        items.push(blockToSurfaceHTMLSnippet(blocks[i], embedAllowlist));
-        i++;
-      }
-      parts.push(`<ul>${items.join('')}</ul>`);
-      continue;
-    }
-
-    if (block.type === 'numbered_list') {
-      const items = [];
-      while (i < blocks.length && blocks[i].type === 'numbered_list') {
-        items.push(blockToSurfaceHTMLSnippet(blocks[i], embedAllowlist));
-        i++;
-      }
-      parts.push(`<ol>${items.join('')}</ol>`);
-      continue;
-    }
-
-    parts.push(blockToSurfaceHTMLSnippet(block, embedAllowlist));
-    i++;
+/** Read inline HTML (sanitized) of an element. Plain-text elements skip DOMPurify. */
+function inlineHTMLOf(el) {
+  if (el.childElementCount === 0) {
+    const t = el.textContent || '';
+    return MARKUP.test(t) ? escText(t) : t;
   }
-  return parts.join('');
-}
-
-/**
- * Parse the surface DOM into a blocks array.
- */
-function surfaceToBlocks(surface) {
-  const blocks = [];
-
-  function processNode(node) {
-    if (node.nodeType === Node.TEXT_NODE) return; // skip bare text nodes
-    if (node.nodeName === 'BR') return;
-
-    const tag = node.nodeName.toUpperCase();
-    const id = node.dataset && node.dataset.breId ? node.dataset.breId : generateId();
-
-    switch (tag) {
-      case 'P': {
-        // Check if this paragraph contains only a formula span
-        const formulaSpan = node.querySelector('[data-bre-type="formula"]');
-        if (formulaSpan && node.textContent.trim() === formulaSpan.textContent.trim()) {
-          const latex = formulaSpan.getAttribute('data-bre-latex') || '';
-          blocks.push({ id, type: 'formula', data: { latex } });
-        } else {
-          blocks.push({ id, type: 'paragraph', data: { html: sanitizeHTML(node.innerHTML) } });
-        }
-        break;
-      }
-      case 'H1':
-      case 'H2':
-      case 'H3':
-      case 'H4':
-      case 'H5':
-      case 'H6': {
-        const level = parseInt(tag[1], 10);
-        blocks.push({ id, type: 'heading', data: { level, html: sanitizeHTML(node.innerHTML) } });
-        break;
-      }
-      case 'BLOCKQUOTE': {
-        blocks.push({ id, type: 'quote', data: { html: sanitizeHTML(node.innerHTML) } });
-        break;
-      }
-      case 'PRE': {
-        const codeEl = node.querySelector('code');
-        const code = codeEl ? (codeEl.textContent || '') : (node.textContent || '');
-        const language = (node.dataset && node.dataset.breLang) || '';
-        blocks.push({ id, type: 'code', data: { code, language } });
-        break;
-      }
-      case 'UL': {
-        // Process each li as bulleted_list
-        for (const li of node.children) {
-          if (li.nodeName !== 'LI') continue;
-          const liId = (li.dataset && li.dataset.breId) ? li.dataset.breId : generateId();
-          blocks.push({ id: liId, type: 'bulleted_list', data: { html: sanitizeHTML(li.innerHTML) } });
-        }
-        break;
-      }
-      case 'OL': {
-        // Process each li as numbered_list
-        for (const li of node.children) {
-          if (li.nodeName !== 'LI') continue;
-          const liId = (li.dataset && li.dataset.breId) ? li.dataset.breId : generateId();
-          blocks.push({ id: liId, type: 'numbered_list', data: { html: sanitizeHTML(li.innerHTML) } });
-        }
-        break;
-      }
-      case 'HR': {
-        blocks.push({ id, type: 'divider', data: {} });
-        break;
-      }
-      case 'FIGURE': {
-        const type = node.dataset && node.dataset.breType;
-        if (type === 'image') {
-          blocks.push({ id, type: 'image', data: {
-            src: (node.dataset && node.dataset.breSrc) || '',
-            alt: (node.dataset && node.dataset.breAlt) || '',
-            caption: (node.dataset && node.dataset.breCaption) || '',
-          }});
-        } else if (type === 'audio') {
-          blocks.push({ id, type: 'audio', data: {
-            src: (node.dataset && node.dataset.breSrc) || '',
-            caption: (node.dataset && node.dataset.breCaption) || '',
-          }});
-        } else if (type === 'video') {
-          blocks.push({ id, type: 'video', data: {
-            src: (node.dataset && node.dataset.breSrc) || '',
-            caption: (node.dataset && node.dataset.breCaption) || '',
-          }});
-        }
-        break;
-      }
-      case 'DIV': {
-        const breType = node.dataset && node.dataset.breType;
-        if (breType === 'table') {
-          // Read cell text from the editable table cells
-          const rows = [];
-          const tableEl = node.querySelector('table');
-          if (tableEl) {
-            for (const tr of tableEl.querySelectorAll('tr')) {
-              const row = [];
-              for (const cell of tr.querySelectorAll('th, td')) {
-                row.push(cell.textContent || '');
-              }
-              if (row.length > 0) rows.push(row);
-            }
-          }
-          blocks.push({ id, type: 'table', data: { rows } });
-        } else {
-          // Chrome wraps new lines in divs — treat as paragraph
-          blocks.push({ id, type: 'paragraph', data: { html: sanitizeHTML(node.innerHTML) } });
-        }
-        break;
-      }
-      default: {
-        // Skip unknown elements silently (span, b, i, etc. at top level are ignored)
-        break;
-      }
+  if (el.childElementCount === 1 && el.firstElementChild.nodeName === 'BR' && !(el.textContent || '')) return '';
+  let src = el;
+  if (el.querySelector('[data-bre-type="formula"]')) {
+    // Store inline formulas as `$latex$` spans, not their rendered KaTeX markup.
+    src = el.cloneNode(true);
+    for (const f of src.querySelectorAll('[data-bre-type="formula"]')) {
+      f.textContent = `$${f.getAttribute('data-bre-latex') || ''}$`;
     }
   }
-
-  for (const child of surface.childNodes) {
-    if (child.nodeType === Node.TEXT_NODE) {
-      // Bare text at surface level — wrap as paragraph
-      const text = child.textContent || '';
-      if (text.trim()) {
-        blocks.push({ id: generateId(), type: 'paragraph', data: { html: escapeHTML(text) } });
-      }
-      continue;
-    }
-    processNode(child);
-  }
-
-  return blocks;
-}
-
-/**
- * Serialize blocks to getHTML() output using the block registry plugins.
- */
-function blocksToHTML(blocks) {
-  const parts = [];
-  let i = 0;
-  while (i < blocks.length) {
-    const block = blocks[i];
-
-    if (block.type === 'bulleted_list') {
-      const group = [];
-      while (i < blocks.length && blocks[i].type === 'bulleted_list') {
-        group.push(blocks[i]);
-        i++;
-      }
-      if (blockRegistry.has('bulleted_list')) {
-        const plugin = blockRegistry.get('bulleted_list');
-        const items = group.map(b => plugin.toHTML(b)).join('\n');
-        parts.push(`<ul>\n${items}\n</ul>`);
-      }
-      continue;
-    }
-
-    if (block.type === 'numbered_list') {
-      const group = [];
-      while (i < blocks.length && blocks[i].type === 'numbered_list') {
-        group.push(blocks[i]);
-        i++;
-      }
-      if (blockRegistry.has('numbered_list')) {
-        const plugin = blockRegistry.get('numbered_list');
-        const items = group.map(b => plugin.toHTML(b)).join('\n');
-        parts.push(`<ol>\n${items}\n</ol>`);
-      }
-      continue;
-    }
-
-    if (blockRegistry.has(block.type)) {
-      const plugin = blockRegistry.get(block.type);
-      parts.push(plugin.toHTML(block));
-    }
-    i++;
-  }
-  return parts.join('\n');
+  const h = src.innerHTML;
+  return isSimpleInlineHTML(h) ? h : sanitizeHTML(h);
 }
 
 // ── BREW editor factory ────────────────────────────────────────────────────────
@@ -402,293 +184,610 @@ export function createBrewEditor(container, options = {}) {
     mode: 'BREW',
     onChange: null,
     embedAllowlist: DEFAULT_EMBED_ALLOWLIST,
+    readOnly: false,
     ...options,
   };
+  const messages = { ...DEFAULT_MESSAGES, ...(opts.messages || {}) };
+  if (typeof opts.placeholder === 'string') messages.placeholder = opts.placeholder;
 
   // Register video plugin if not already registered (e.g. when BREW used standalone)
   if (!blockRegistry.has('video')) {
     blockRegistry.register('video', createVideoPlugin(opts.embedAllowlist));
   }
 
-  // Internal document state
-  let _blocks = [];
-  let _docMeta = {
-    id: generateId(),
-    version: 1,
-    created: Date.now(),
-    updated: Date.now(),
+  const emitter = new EventEmitter();
+  const cleanups = [];
+  for (const [ev, fn] of [
+    ['change', opts.onChange], ['ready', opts.onReady], ['focus', opts.onFocus],
+    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange],
+  ]) {
+    if (typeof fn === 'function') cleanups.push(emitter.on(ev, fn));
+  }
+  const listen = (target, type, fn, o) => {
+    target.addEventListener(type, fn, o);
+    cleanups.push(() => target.removeEventListener(type, fn, o));
   };
+
+  let readOnly = !!opts.readOnly;
+  let destroyed = false;
+  let changeTimer = null;
+  let selRaf = null;
+  let activeDialog = null;
+
+  let _docMeta = { id: generateId(), version: 1, created: Date.now(), updated: Date.now() };
+
+  // ── Model cache ─────────────────────────────────────────────────────────────
+  /** unit node -> { block, html, dirty, list } */
+  const cache = new WeakMap();
+  let modelDirty = true;
+  let _units = [];
+  let _blocks = [];
 
   // ── DOM structure ──────────────────────────────────────────────────────────
 
   const root = document.createElement('div');
   root.className = 'bre-editor bre-editor--brew';
   root.setAttribute('data-bre-mode', 'BREW');
+  if (opts.dir) root.setAttribute('dir', opts.dir);
 
-  // Toolbar
   const toolbar = document.createElement('div');
   toolbar.className = 'bre-brew-toolbar';
   toolbar.setAttribute('role', 'toolbar');
-  toolbar.setAttribute('aria-label', 'Formatting');
+  toolbar.setAttribute('aria-label', messages.toolbarLabel);
 
-  // Block type selector (headings + paragraph only)
+  const headingLabel = (n) => messages.headingN.replace('{n}', String(n));
+
   const blockTypeSelect = document.createElement('select');
   blockTypeSelect.className = 'bre-brew-block-type';
+  blockTypeSelect.setAttribute('aria-label', messages.blockType);
   const BLOCK_TYPE_OPTIONS = [
-    { value: 'paragraph',  label: 'Paragraph' },
-    { value: 'heading-1',  label: 'Heading 1' },
-    { value: 'heading-2',  label: 'Heading 2' },
-    { value: 'heading-3',  label: 'Heading 3' },
-    { value: 'heading-4',  label: 'Heading 4' },
-    { value: 'heading-5',  label: 'Heading 5' },
-    { value: 'heading-6',  label: 'Heading 6' },
+    { value: 'paragraph', label: messages.paragraph },
+    ...[1, 2, 3, 4, 5, 6].map(n => ({ value: `heading-${n}`, label: headingLabel(n) })),
   ];
-  for (const opt of BLOCK_TYPE_OPTIONS) {
+  for (const o of BLOCK_TYPE_OPTIONS) {
     const option = document.createElement('option');
-    option.value = opt.value;
-    option.textContent = opt.label;
+    option.value = o.value;
+    option.textContent = o.label;
     blockTypeSelect.appendChild(option);
   }
   toolbar.appendChild(blockTypeSelect);
 
-  // Separator
-  const sep1 = document.createElement('div');
-  sep1.className = 'bre-brew-toolbar-sep';
-  toolbar.appendChild(sep1);
-
-  // Inline mark buttons
-  const btnBold      = createToolbarBtn('B',   'bold',      'Bold (⌘B)');
-  const btnItalic    = createToolbarBtn('I',   'italic',    'Italic (⌘I)');
-  const btnUnderline = createToolbarBtn('U',   'underline', 'Underline (⌘U)');
-  toolbar.appendChild(btnBold);
-  toolbar.appendChild(btnItalic);
-  toolbar.appendChild(btnUnderline);
-
-  // Separator
-  const sep2 = document.createElement('div');
-  sep2.className = 'bre-brew-toolbar-sep';
-  toolbar.appendChild(sep2);
-
-  // Block-type toggle buttons (bullet, numbered, quote, code)
-  const btnBullet   = createToolbarBtn('•',   'bulleted_list',  'Bulleted List');
-  const btnNumbered = createToolbarBtn('1.',  'numbered_list',  'Numbered List');
-  const btnQuote    = createToolbarBtn('"',   'quote',          'Quote');
-  const btnCode     = createToolbarBtn('</>',  'code',           'Code Block');
-  toolbar.appendChild(btnBullet);
-  toolbar.appendChild(btnNumbered);
-  toolbar.appendChild(btnQuote);
-  toolbar.appendChild(btnCode);
-
-  // Separator
-  const sep3 = document.createElement('div');
-  sep3.className = 'bre-brew-toolbar-sep';
-  toolbar.appendChild(sep3);
-
-  // Insert buttons
-  const btnDivider = createToolbarBtn('—', 'divider', 'Insert Divider');
-  const btnLink    = createToolbarBtn('Link', 'link', 'Insert Link');
-  const btnFormula = createToolbarBtn('∑',  'formula', 'Insert Formula');
-  toolbar.appendChild(btnDivider);
-  toolbar.appendChild(btnLink);
-  toolbar.appendChild(btnFormula);
-
-  // Separator
-  const sep4 = document.createElement('div');
-  sep4.className = 'bre-brew-toolbar-sep';
-  toolbar.appendChild(sep4);
-
-  // Media / table insert buttons
-  const btnTable = createToolbarBtn('⊞', 'table', 'Insert Table');
-  const btnImage = createToolbarBtn('🖼', 'image', 'Insert Image');
-  const btnAudio = createToolbarBtn('♪', 'audio', 'Insert Audio');
-  const btnVideo = createToolbarBtn('▶', 'video', 'Insert Video');
-  toolbar.appendChild(btnTable);
-  toolbar.appendChild(btnImage);
-  toolbar.appendChild(btnAudio);
-  toolbar.appendChild(btnVideo);
-
-  // Surface
-  const surface = document.createElement('div');
-  surface.className = 'bre-brew-surface';
-  surface.setAttribute('contenteditable', 'true');
-  surface.setAttribute('spellcheck', 'true');
-
-  root.appendChild(toolbar);
-  root.appendChild(surface);
-  container.appendChild(root);
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
-  function createToolbarBtn(text, cmd, title) {
+  function createToolbarBtn(text, cmd, label, toggle) {
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'bre-brew-btn';
     btn.setAttribute('data-brew-cmd', cmd);
-    btn.setAttribute('title', title);
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+    if (toggle) btn.setAttribute('aria-pressed', 'false');
     btn.textContent = text;
     return btn;
   }
+  const addSep = () => {
+    const sep = document.createElement('div');
+    sep.className = 'bre-brew-toolbar-sep';
+    sep.setAttribute('role', 'separator');
+    toolbar.appendChild(sep);
+  };
+
+  addSep();
+  const btnBold      = createToolbarBtn('B', 'bold', messages.bold, true);
+  const btnItalic    = createToolbarBtn('I', 'italic', messages.italic, true);
+  const btnUnderline = createToolbarBtn('U', 'underline', messages.underline, true);
+  toolbar.append(btnBold, btnItalic, btnUnderline);
+  addSep();
+  const btnBullet   = createToolbarBtn('•', 'bulleted_list', messages.bulletedList, true);
+  const btnNumbered = createToolbarBtn('1.', 'numbered_list', messages.numberedList, true);
+  const btnQuote    = createToolbarBtn('"', 'quote', messages.quote, true);
+  const btnCode     = createToolbarBtn('</>', 'code', messages.codeBlock, true);
+  toolbar.append(btnBullet, btnNumbered, btnQuote, btnCode);
+  addSep();
+  const btnDivider = createToolbarBtn('—', 'divider', messages.divider);
+  const btnLink    = createToolbarBtn('Link', 'link', messages.link);
+  const btnFormula = createToolbarBtn('∑', 'formula', messages.formula);
+  toolbar.append(btnDivider, btnLink, btnFormula);
+  addSep();
+  const btnTable = createToolbarBtn('⊞', 'table', messages.table);
+  const btnImage = createToolbarBtn('🖼', 'image', messages.image);
+  const btnAudio = createToolbarBtn('♪', 'audio', messages.audio);
+  const btnVideo = createToolbarBtn('▶', 'video', messages.video);
+  toolbar.append(btnTable, btnImage, btnAudio, btnVideo);
+
+  const surface = document.createElement('div');
+  surface.className = 'bre-brew-surface';
+  surface.setAttribute('role', 'textbox');
+  surface.setAttribute('aria-multiline', 'true');
+  surface.setAttribute('aria-label', messages.surfaceLabel);
+  surface.setAttribute('spellcheck', 'true');
+  surface.setAttribute('data-bre-placeholder', messages.placeholder);
+
+  if (!readOnly) root.appendChild(toolbar);
+  root.appendChild(surface);
+  container.appendChild(root);
+
+  // ── Block -> DOM (setJSON) ──────────────────────────────────────────────────
+
+  const tpl = document.createElement('template');
+
+  function formulaSpanHTML(latex, displayMode, rendered) {
+    const l = escapeHTML(latex);
+    const disp = displayMode === false ? ' data-bre-display="false"' : '';
+    return `<span data-bre-type="formula" data-bre-latex="${l}"${disp} contenteditable="false">${rendered != null ? rendered : escapeHTML('$' + latex + '$')}</span>`;
+  }
+
+  function renderKatex(latex, displayMode) {
+    const katex = getKaTeX();
+    if (!katex) return null;
+    try {
+      return sanitizeHTML(
+        katex.renderToString(latex, { throwOnError: false, output: 'html', displayMode: displayMode !== false }),
+        { allowKaTeX: true },
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** Complex (non-text) block -> HTML snippet string. */
+  function snippetFor(block, id) {
+    const d = block.data || {};
+    switch (block.type) {
+      case 'code': {
+        const lang = escapeHTML(d.language || '');
+        return `<pre data-bre-type="code" data-bre-lang="${lang}" data-bre-id="${id}" data-bre-block-id="${id}"><code>${escapeHTML(d.code || '') || '<br>'}</code></pre>`;
+      }
+      case 'divider':
+        return `<hr data-bre-type="divider" data-bre-id="${id}" data-bre-block-id="${id}">`;
+      case 'formula': {
+        const latex = d.latex || '';
+        return `<p data-bre-id="${id}" data-bre-block-id="${id}">${formulaSpanHTML(latex, d.displayMode, renderKatex(latex, d.displayMode))}</p>`;
+      }
+      case 'table': {
+        const rows = Array.isArray(d.rows) && d.rows.length ? d.rows : [['', ''], ['', '']];
+        const [headerRow, ...bodyRows] = rows;
+        const makeCell = (tag, content, rowIdx, colIdx) => {
+          const ph = rowIdx === 0 ? messages.tableHeader : messages.tableCell;
+          return `<${tag} class="bre-table-cell" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-table-row="${rowIdx}" data-bre-table-col="${colIdx}" data-bre-placeholder="${escapeHTML(ph)}">${escapeHTML(String(content ?? ''))}</${tag}>`;
+        };
+        const th = headerRow ? `<thead><tr>${headerRow.map((c, ci) => makeCell('th', c, 0, ci)).join('')}</tr></thead>` : '';
+        const tb = bodyRows.length
+          ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1, ci)).join('')}</tr>`).join('')}</tbody>`
+          : '';
+        const btn = (a, label) => `<button type="button" class="bre-table-btn" data-bre-table-action="${a}">${escapeHTML(label)}</button>`;
+        const controls = `<div class="bre-table-controls"${readOnly ? ' hidden' : ''}>${btn('add-row', messages.addRow)}${btn('del-row', messages.delRow)}${btn('add-col', messages.addCol)}${btn('del-col', messages.delCol)}</div>`;
+        return `<div data-bre-type="table" data-bre-id="${id}" data-bre-block-id="${id}" contenteditable="false" class="bre-table-wrapper"><table class="bre-table">${th}${tb}</table>${controls}</div>`;
+      }
+      case 'image': {
+        const src = d.src || '';
+        const inner = src
+          ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(d.alt || '')}" loading="lazy">`
+          : `<div class="bre-image-placeholder">${escapeHTML(messages.imagePlaceholder)}</div>`;
+        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+      }
+      case 'audio': {
+        const src = d.src || '';
+        const inner = src
+          ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
+          : `<div class="bre-audio-placeholder">${escapeHTML(messages.audioPlaceholder)}</div>`;
+        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+      }
+      case 'video': {
+        const src = d.src || '';
+        const embedUrl = brewGetEmbedUrl(src, opts.embedAllowlist || DEFAULT_EMBED_ALLOWLIST);
+        let inner;
+        if (!src) inner = `<div class="bre-video-placeholder">${escapeHTML(messages.videoPlaceholder)}</div>`;
+        else if (embedUrl) inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
+        else inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
+        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+      }
+      default:
+        return '';
+    }
+  }
+
+  function snippetToNode(html) {
+    tpl.innerHTML = sanitizeHTML(html, { allowKaTeX: false, allowMedia: true });
+    return tpl.content.firstElementChild;
+  }
+
+  /** Flatten columns, expand markdown blocks, drop junk. Warns once on lossy steps. */
+  function normalizeBlocks(blocks, out = []) {
+    for (const b of blocks) {
+      if (!b || typeof b !== 'object') continue;
+      if (b.type === 'markdown') {
+        normalizeBlocks(markdownToBlocks((b.data && b.data.markdown) || ''), out);
+      } else if (b.type === 'columns') {
+        warnOnce('columns', 'BREW flattens columns blocks into a single column');
+        const cols = (b.data && Array.isArray(b.data.children)) ? b.data.children : [];
+        for (const col of cols) normalizeBlocks(Array.isArray(col) ? col : [], out);
+      } else {
+        out.push(b);
+      }
+    }
+    return out;
+  }
+
+  const TEXT_TAG = { paragraph: 'p', quote: 'blockquote', bulleted_list: 'li', numbered_list: 'li' };
 
   /**
-   * Find the block-level element that contains the current selection anchor.
-   * Returns the direct child of surface, or null.
+   * Phase 1: describe one unit. Text blocks carry inline html still to be
+   * sanitized (`pending`); complex blocks carry a snippet string. Sanitizing
+   * is batched across the whole document in phase 2 (see setJSON).
    */
+  function planBlock(b, flags) {
+    const id = b.id || generateId();
+    const d = b.data || {};
+    let tag = TEXT_TAG[b.type];
+    if (b.type === 'heading') tag = `h${Math.min(6, Math.max(1, parseInt(d.level, 10) || 1))}`;
+    if (tag) {
+      let html;
+      let pending = false;
+      if (typeof d.html === 'string') {
+        html = d.html;
+        pending = !isSimpleInlineHTML(html);
+      } else {
+        const text = d.text == null ? '' : String(d.text);
+        html = MARKUP.test(text) ? escText(text) : text;
+      }
+      return { b, id, tag, html, pending };
+    }
+    if (b.type === 'formula') flags.formula = true;
+    const snippet = snippetFor(b, id);
+    if (snippet) {
+      // code/divider snippets are fully escaped constants — no sanitize needed
+      return { b, id, snippet, pending: b.type !== 'code' && b.type !== 'divider' };
+    }
+    // Unknown type: keep its text rather than dropping silently
+    const text = d.html != null ? String(d.html) : (d.text != null ? escText(String(d.text)) : '');
+    if (text) {
+      warnOnce('unk:' + b.type, `BREW: unknown block type "${b.type}" loaded as a paragraph`);
+      return { b: { ...b, type: 'paragraph' }, id, tag: 'p', html: text, pending: true };
+    }
+    warnOnce('unk:' + b.type, `BREW: block type "${b.type}" has no WYSIWYG representation and was skipped`);
+    return null;
+  }
+
+  /** Phase 3: create the DOM node (+ seed cache for text blocks). */
+  function nodeFromPlan(pl, flags) {
+    if (pl.snippet != null) {
+      if (pl.b.type === 'code' || pl.b.type === 'divider') {
+        // Cheap path: build directly instead of parsing a snippet.
+        const isCode = pl.b.type === 'code';
+        const el = document.createElement(isCode ? 'pre' : 'hr');
+        el.setAttribute('data-bre-type', pl.b.type);
+        el.setAttribute('data-bre-id', pl.id);
+        el.setAttribute('data-bre-block-id', pl.id);
+        if (isCode) {
+          const d = pl.b.data || {};
+          el.setAttribute('data-bre-lang', d.language || '');
+          const code = document.createElement('code');
+          if (d.code) code.textContent = d.code; else code.appendChild(document.createElement('br'));
+          el.appendChild(code);
+        }
+        return el;
+      }
+      tpl.innerHTML = pl.snippet; // already sanitized (or fully escaped) in phase 2
+      return tpl.content.firstElementChild;
+    }
+    const { b, id, tag, html } = pl;
+    const el = document.createElement(tag);
+    el.setAttribute('data-bre-type', b.type);
+    el.setAttribute('data-bre-id', id);
+    el.setAttribute('data-bre-block-id', id);
+    if (html) {
+      if (MARKUP.test(html)) {
+        if (html.includes('data-bre-type="formula"')) flags.formula = true;
+        el.innerHTML = html; // sanitized in phase 2
+      } else {
+        el.textContent = html;
+      }
+    } else {
+      el.appendChild(document.createElement('br'));
+    }
+    let data;
+    if (b.type === 'heading') {
+      const level = Number(tag[1]);
+      el.setAttribute('data-bre-level', String(level));
+      data = { level, html };
+    } else {
+      data = { html };
+    }
+    const listTag = b.type === 'bulleted_list' ? 'UL' : b.type === 'numbered_list' ? 'OL' : null;
+    cache.set(el, { block: { id, type: b.type, data }, html: null, dirty: false, list: listTag });
+    return el;
+  }
+
+  function hydrateFormulas() {
+    const katex = getKaTeX();
+    if (!katex) return;
+    for (const span of surface.querySelectorAll('[data-bre-type="formula"]')) {
+      if (span.querySelector('.katex')) continue;
+      const latex = span.getAttribute('data-bre-latex') || '';
+      const isBlock = span.parentNode && span.parentNode.nodeName === 'P' &&
+        (span.parentNode.textContent || '').trim() === (span.textContent || '').trim() &&
+        span.getAttribute('data-bre-display') !== 'false';
+      const rendered = renderKatex(latex, isBlock);
+      if (rendered != null) {
+        span.setAttribute('contenteditable', 'false');
+        span.innerHTML = rendered; // sanitized by renderKatex
+      }
+    }
+  }
+
+  function afterLoad(flags) {
+    if (!flags.formula) return;
+    if (getKaTeX()) hydrateFormulas();
+    else loadKaTeX().then(() => { if (!destroyed) hydrateFormulas(); });
+  }
+
+  // ── DOM -> model ────────────────────────────────────────────────────────────
+
+  function readUnit(node, listTag) {
+    if (node.nodeType === 3) {
+      const text = node.textContent || '';
+      return text.trim() ? { id: generateId(), type: 'paragraph', data: { html: escText(text) } } : null;
+    }
+    if (node.nodeType !== 1) return null;
+    const tag = node.nodeName.toUpperCase();
+    if (tag === 'BR' || tag === 'STYLE' || tag === 'SCRIPT') return null;
+
+    let id = node.getAttribute('data-bre-id');
+    if (!id) { id = generateId(); node.setAttribute('data-bre-id', id); }
+    if (!node.hasAttribute('data-bre-block-id')) node.setAttribute('data-bre-block-id', id);
+
+    if (listTag) {
+      return { id, type: listTag === 'UL' ? 'bulleted_list' : 'numbered_list', data: { html: inlineHTMLOf(node) } };
+    }
+    if (HEADING_TAG.test(tag)) {
+      return { id, type: 'heading', data: { level: parseInt(tag[1], 10), html: inlineHTMLOf(node) } };
+    }
+    switch (tag) {
+      case 'P': {
+        const formulaSpan = node.querySelector('[data-bre-type="formula"]');
+        if (formulaSpan && node.textContent.trim() === formulaSpan.textContent.trim()) {
+          return {
+            id, type: 'formula',
+            data: { latex: formulaSpan.getAttribute('data-bre-latex') || '', displayMode: formulaSpan.getAttribute('data-bre-display') !== 'false' },
+          };
+        }
+        return { id, type: 'paragraph', data: { html: inlineHTMLOf(node) } };
+      }
+      case 'BLOCKQUOTE':
+        return { id, type: 'quote', data: { html: inlineHTMLOf(node) } };
+      case 'PRE': {
+        const codeEl = node.querySelector('code');
+        const code = codeEl ? (codeEl.textContent || '') : (node.textContent || '');
+        let language = node.getAttribute('data-bre-lang') || '';
+        if (!language && codeEl) {
+          const m = /(?:^|\s)language-([\w-]+)/.exec(codeEl.getAttribute('class') || '');
+          if (m) language = m[1];
+        }
+        return { id, type: 'code', data: { code: code === '\n' ? '' : code, language } };
+      }
+      case 'HR':
+        return { id, type: 'divider', data: {} };
+      case 'FIGURE': {
+        const type = node.getAttribute('data-bre-type');
+        const src = node.getAttribute('data-bre-src') || '';
+        const caption = node.getAttribute('data-bre-caption') || '';
+        if (type === 'image') return { id, type, data: { src, alt: node.getAttribute('data-bre-alt') || '', caption } };
+        if (type === 'audio' || type === 'video') return { id, type, data: { src, caption } };
+        return { id, type: 'paragraph', data: { html: inlineHTMLOf(node) } };
+      }
+      case 'DIV': {
+        if (node.getAttribute('data-bre-type') === 'table') {
+          const rows = [];
+          const tableEl = node.querySelector('table');
+          if (tableEl) {
+            for (const tr of tableEl.querySelectorAll('tr')) {
+              const row = [];
+              for (const cell of tr.querySelectorAll('th, td')) row.push(cell.textContent || '');
+              if (row.length) rows.push(row);
+            }
+          }
+          return { id, type: 'table', data: { rows } };
+        }
+        // Chrome wraps new lines in divs — treat as paragraph
+        return { id, type: 'paragraph', data: { html: inlineHTMLOf(node) } };
+      }
+      case 'UL':
+      case 'OL':
+        return null; // handled per <li>
+      default: {
+        // Stray inline/unknown top-level element — keep its content as a paragraph.
+        const html = inlineHTMLOf(node);
+        return html ? { id, type: 'paragraph', data: { html } } : null;
+      }
+    }
+  }
+
+  function unitOf(target) {
+    if (!target || target === surface) return null;
+    let n = target;
+    let prev = null;
+    while (n && n.parentNode !== surface) { prev = n; n = n.parentNode; }
+    if (!n) return null;
+    if (n.nodeName === 'UL' || n.nodeName === 'OL') return prev && prev.parentNode === n ? prev : null;
+    return n;
+  }
+
+  function markRecords(records) {
+    for (const r of records) {
+      if (r.type === 'attributes' && (r.attributeName === 'data-bre-id' || r.attributeName === 'data-bre-block-id')) continue;
+      modelDirty = true;
+      const u = unitOf(r.target);
+      if (u) {
+        const e = cache.get(u);
+        if (e) e.dirty = true;
+      }
+    }
+  }
+
+  const observer = new MutationObserver(markRecords);
+  observer.observe(surface, { childList: true, subtree: true, characterData: true, attributes: true });
+
+  function buildModel() {
+    markRecords(observer.takeRecords());
+    if (!modelDirty) return;
+    const seen = new Set();
+    const units = [];
+    const visit = (node, listTag) => {
+      let e = cache.get(node);
+      if (!e || e.dirty || e.list !== listTag) {
+        const block = readUnit(node, listTag);
+        e = { block, html: null, dirty: false, list: listTag };
+        cache.set(node, e);
+      }
+      if (!e.block) return;
+      if (seen.has(e.block.id)) {
+        // Browser cloned a node (Enter/split) — give the duplicate its own id.
+        const id = generateId();
+        e.block = { ...e.block, id };
+        if (node.nodeType === 1) { node.setAttribute('data-bre-id', id); node.setAttribute('data-bre-block-id', id); }
+      }
+      seen.add(e.block.id);
+      units.push(e);
+    };
+    for (const node of surface.childNodes) {
+      if (node.nodeType === 1 && (node.nodeName === 'UL' || node.nodeName === 'OL')) {
+        for (const li of node.children) if (li.nodeName === 'LI') visit(li, node.nodeName);
+      } else {
+        visit(node, null);
+      }
+    }
+    _units = units;
+    _blocks = units.map(u => u.block);
+    modelDirty = false;
+    // Attribute writes above were queued as records; they're filtered, drop them.
+    observer.takeRecords();
+  }
+
+  // ── Selection / toolbar state ───────────────────────────────────────────────
+
   function getAnchorBlockEl() {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
     let node = sel.anchorNode;
-    if (!node) return null;
-    // Walk up to a direct child of surface
+    if (!node || !surface.contains(node)) return null;
     while (node && node.parentNode !== surface) {
-      // Also handle list items inside ul/ol
-      if (node.parentNode && (node.parentNode.nodeName === 'UL' || node.parentNode.nodeName === 'OL')) {
-        // node is an LI whose parent UL/OL is a direct child of surface
-        if (node.parentNode.parentNode === surface) {
-          return node; // return the LI
-        }
+      if (node.parentNode && (node.parentNode.nodeName === 'UL' || node.parentNode.nodeName === 'OL') &&
+          node.parentNode.parentNode === surface) {
+        return node; // the LI
       }
       node = node.parentNode;
     }
     return node instanceof Element ? node : null;
   }
 
-  /**
-   * Get the BRE block type for the element currently hosting the cursor.
-   * Returns e.g. 'paragraph', 'heading-1', 'code', etc.
-   */
   function getCurrentBlockType() {
     const el = getAnchorBlockEl();
     if (!el) return 'paragraph';
     const tag = el.nodeName.toUpperCase();
+    if (HEADING_TAG.test(tag)) return `heading-${tag[1]}`;
     switch (tag) {
-      case 'P': return 'paragraph';
-      case 'H1': return 'heading-1';
-      case 'H2': return 'heading-2';
-      case 'H3': return 'heading-3';
-      case 'H4': return 'heading-4';
-      case 'H5': return 'heading-5';
-      case 'H6': return 'heading-6';
       case 'BLOCKQUOTE': return 'quote';
       case 'PRE': return 'code';
-      case 'LI': {
-        const parent = el.parentNode;
-        if (!parent) return 'paragraph';
-        return parent.nodeName === 'UL' ? 'bulleted_list' : 'numbered_list';
-      }
+      case 'LI': return el.parentNode && el.parentNode.nodeName === 'UL' ? 'bulleted_list' : 'numbered_list';
       default: return 'paragraph';
     }
   }
 
-  /**
-   * Return whether the current block type supports inline marks.
-   */
   function currentBlockHasInline() {
-    const blockType = getCurrentBlockType();
-    // Normalize heading-N to 'heading'
-    const baseType = blockType.startsWith('heading') ? 'heading' : blockType;
-    const caps = blockRegistry.getCapabilities(baseType);
-    return caps.inline;
+    const t = getCurrentBlockType();
+    return blockRegistry.getCapabilities(t.startsWith('heading') ? 'heading' : t).inline;
   }
 
-  /**
-   * Update toolbar state (button active states, block type selector, disabled states).
-   */
+  function setPressed(btn, on) {
+    btn.setAttribute('data-active', on ? 'true' : 'false');
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
   function updateToolbarState() {
+    if (readOnly || destroyed) return;
     const currentType = getCurrentBlockType();
-
-    // Block type selector — headings + paragraph
-    if (BLOCK_TYPE_OPTIONS.some(o => o.value === currentType)) {
-      blockTypeSelect.value = currentType;
-    } else {
-      blockTypeSelect.value = 'paragraph';
-    }
-
-    // Block-type toggle buttons active state
-    btnBullet.setAttribute('data-active',   currentType === 'bulleted_list'  ? 'true' : 'false');
-    btnNumbered.setAttribute('data-active', currentType === 'numbered_list'  ? 'true' : 'false');
-    btnQuote.setAttribute('data-active',    currentType === 'quote'          ? 'true' : 'false');
-    btnCode.setAttribute('data-active',     currentType === 'code'           ? 'true' : 'false');
-
-    // Inline mark button active + disabled states
+    blockTypeSelect.value = BLOCK_TYPE_OPTIONS.some(o => o.value === currentType) ? currentType : 'paragraph';
+    setPressed(btnBullet, currentType === 'bulleted_list');
+    setPressed(btnNumbered, currentType === 'numbered_list');
+    setPressed(btnQuote, currentType === 'quote');
+    setPressed(btnCode, currentType === 'code');
     const hasInline = currentBlockHasInline();
-    const markButtons = [btnBold, btnItalic, btnUnderline];
-    for (const btn of markButtons) {
+    for (const btn of [btnBold, btnItalic, btnUnderline]) {
       btn.disabled = !hasInline;
+      let active = false;
       if (hasInline) {
-        try {
-          const cmd = btn.getAttribute('data-brew-cmd');
-          const active = document.queryCommandState(cmd);
-          btn.setAttribute('data-active', active ? 'true' : 'false');
-        } catch {
-          btn.setAttribute('data-active', 'false');
-        }
-      } else {
-        btn.setAttribute('data-active', 'false');
+        try { active = document.queryCommandState(btn.getAttribute('data-brew-cmd')); } catch { /* jsdom */ }
       }
+      setPressed(btn, active);
     }
+  }
+
+  // ── Change notification ─────────────────────────────────────────────────────
+
+  function scheduleChange() {
+    if (readOnly) return;
+    clearTimeout(changeTimer);
+    changeTimer = setTimeout(() => {
+      changeTimer = null;
+      if (destroyed) return;
+      _docMeta.updated = Date.now();
+      emitter.emit('change', getDoc());
+    }, CHANGE_DELAY);
   }
 
   // ── Block type change ──────────────────────────────────────────────────────
 
-  /** Convert the block currently hosting the cursor to the given type value. */
   function setCurrentBlockType(value) {
     surface.focus();
     const blockEl = getAnchorBlockEl();
     if (!blockEl) return;
+    if (blockEl.getAttribute('data-bre-type') === 'table' || blockEl.nodeName === 'FIGURE') return;
 
-    const currentText = blockEl.textContent || '';
+    const isPre = blockEl.nodeName === 'PRE';
+    const plain = blockEl.textContent || '';
+    const inlineSrc = isPre ? null : sanitizeHTML(blockEl.innerHTML);
     let newEl;
+
+    const fillInline = (el) => {
+      if (inlineSrc != null && MARKUP.test(inlineSrc)) el.innerHTML = inlineSrc; // sanitized above
+      else el.textContent = plain;
+    };
 
     if (value === 'paragraph') {
       newEl = document.createElement('p');
       newEl.setAttribute('data-bre-type', 'paragraph');
+      fillInline(newEl);
     } else if (value.startsWith('heading-')) {
       const level = parseInt(value.split('-')[1], 10);
       newEl = document.createElement(`h${level}`);
       newEl.setAttribute('data-bre-type', 'heading');
       newEl.setAttribute('data-bre-level', String(level));
+      fillInline(newEl);
     } else if (value === 'quote') {
       newEl = document.createElement('blockquote');
       newEl.setAttribute('data-bre-type', 'quote');
+      fillInline(newEl);
     } else if (value === 'code') {
       newEl = document.createElement('pre');
       newEl.setAttribute('data-bre-type', 'code');
       const codeEl = document.createElement('code');
-      codeEl.textContent = currentText;
+      codeEl.textContent = plain;
       newEl.appendChild(codeEl);
-    } else if (value === 'bulleted_list') {
+    } else if (value === 'bulleted_list' || value === 'numbered_list') {
       const li = document.createElement('li');
-      li.setAttribute('data-bre-type', 'bulleted_list');
-      li.textContent = currentText;
-      newEl = document.createElement('ul');
-      newEl.appendChild(li);
-    } else if (value === 'numbered_list') {
-      const li = document.createElement('li');
-      li.setAttribute('data-bre-type', 'numbered_list');
-      li.textContent = currentText;
-      newEl = document.createElement('ol');
+      li.setAttribute('data-bre-type', value);
+      fillInline(li);
+      newEl = document.createElement(value === 'bulleted_list' ? 'ul' : 'ol');
       newEl.appendChild(li);
     }
-
     if (!newEl) return;
+    if (!newEl.firstChild) newEl.appendChild(document.createElement('br'));
 
-    // Non-list, non-code blocks get plain text content
-    if (!['code', 'bulleted_list', 'numbered_list'].includes(value)) {
-      newEl.textContent = currentText;
-    }
+    const targetEl = blockEl.nodeName === 'LI' ? blockEl.parentNode : blockEl;
+    if (targetEl && targetEl.parentNode === surface) surface.replaceChild(newEl, targetEl);
 
-    // If cursor is inside an LI, replace its parent UL/OL
-    let targetEl = blockEl.nodeName === 'LI' ? blockEl.parentNode : blockEl;
-    if (targetEl && targetEl.parentNode === surface) {
-      surface.replaceChild(newEl, targetEl);
-    }
-
-    // Move cursor into the new element
     const sel = window.getSelection();
     const range = document.createRange();
-    let focusTarget = newEl;
-    if (value === 'bulleted_list' || value === 'numbered_list' || value === 'code') {
-      focusTarget = newEl.firstChild;
-    }
+    const focusTarget = (value === 'bulleted_list' || value === 'numbered_list' || value === 'code') ? newEl.firstChild : newEl;
     if (focusTarget) {
       range.selectNodeContents(focusTarget);
       range.collapse(false);
@@ -697,96 +796,194 @@ export function createBrewEditor(container, options = {}) {
     }
     surface.focus();
     updateToolbarState();
-    debouncedSync();
+    scheduleChange();
   }
 
-  blockTypeSelect.addEventListener('change', () => {
-    setCurrentBlockType(blockTypeSelect.value);
-  });
+  listen(blockTypeSelect, 'change', () => setCurrentBlockType(blockTypeSelect.value));
 
-  // Block-type toggle buttons — mousedown+preventDefault preserves surface focus
   for (const [btn, type] of [
-    [btnBullet,   'bulleted_list'],
-    [btnNumbered, 'numbered_list'],
-    [btnQuote,    'quote'],
-    [btnCode,     'code'],
+    [btnBullet, 'bulleted_list'], [btnNumbered, 'numbered_list'], [btnQuote, 'quote'], [btnCode, 'code'],
   ]) {
-    btn.addEventListener('mousedown', (e) => {
+    listen(btn, 'mousedown', (e) => {
       e.preventDefault();
-      setCurrentBlockType(type);
+      // Toggle: pressing the active type again returns to a paragraph
+      setCurrentBlockType(btn.getAttribute('aria-pressed') === 'true' ? 'paragraph' : type);
     });
-  }
-
-  // ── Inline mark buttons ────────────────────────────────────────────────────
-
-  function handleMarkMousedown(e) {
-    e.preventDefault(); // preserve selection
-    const cmd = e.currentTarget.getAttribute('data-brew-cmd');
-    if (!cmd) return;
-    if (['bold', 'italic', 'underline'].includes(cmd)) {
-      if (!currentBlockHasInline()) return;
-      document.execCommand(cmd);
-      updateToolbarState();
-    }
-  }
-
-  btnBold.addEventListener('mousedown', handleMarkMousedown);
-  btnItalic.addEventListener('mousedown', handleMarkMousedown);
-  btnUnderline.addEventListener('mousedown', handleMarkMousedown);
-
-  // ── Insert buttons ─────────────────────────────────────────────────────────
-
-  btnDivider.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    surface.focus();
-    document.execCommand('insertHTML', false, '<hr data-bre-type="divider"><p><br></p>');
-    debouncedSync();
-  });
-
-  btnLink.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    const sel = window.getSelection();
-    const selectedText = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0).toString() : '';
-    // Save the range now, before focus moves to the dialog
-    const savedRange = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0).cloneRange() : null;
-    showLinkDialog({ text: selectedText, url: '' }, ({ text, url }) => {
-      // Restore saved selection before inserting
-      surface.focus();
-      if (savedRange) {
-        const s = window.getSelection();
-        s.removeAllRanges();
-        s.addRange(savedRange);
+    // Keyboard activation (Enter/Space dispatch click without mousedown)
+    listen(btn, 'keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setCurrentBlockType(btn.getAttribute('aria-pressed') === 'true' ? 'paragraph' : type);
       }
-      insertLink(text, url);
-      debouncedSync();
     });
-  });
+  }
+
+  // ── Inline marks ───────────────────────────────────────────────────────────
+
+  function applyMark(cmd) {
+    if (readOnly || !currentBlockHasInline()) return;
+    document.execCommand(cmd);
+    updateToolbarState();
+    scheduleChange();
+  }
+  for (const btn of [btnBold, btnItalic, btnUnderline]) {
+    const cmd = btn.getAttribute('data-brew-cmd');
+    listen(btn, 'mousedown', (e) => { e.preventDefault(); applyMark(cmd); });
+    listen(btn, 'keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); surface.focus(); applyMark(cmd); }
+    });
+  }
+
+  // ── Dialogs ────────────────────────────────────────────────────────────────
+
+  /**
+   * Generic small inline dialog. Esc closes and returns focus (and selection)
+   * to the surface; Enter confirms. `fields`: [{ key, type, placeholder, value }].
+   * `onSave(values)` runs after `validate(values)` returns no invalid keys.
+   */
+  function openDialog({ className, label, fields, savedRange, validate, onSave, onRemove }) {
+    if (activeDialog) activeDialog.close(false);
+
+    const dialog = document.createElement('div');
+    dialog.className = className;
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-label', label);
+
+    const inputs = {};
+    for (const f of fields) {
+      const input = document.createElement('input');
+      input.type = f.type || 'text';
+      input.placeholder = f.placeholder;
+      input.setAttribute('aria-label', f.placeholder);
+      input.value = f.value || '';
+      input.className = 'bre-brew-link-input';
+      dialog.appendChild(input);
+      inputs[f.key] = input;
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'bre-brew-link-actions';
+    const mk = (text, cls) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.className = cls;
+      return b;
+    };
+    const saveBtn = mk(messages.save, 'bre-brew-link-save');
+    const cancelBtn = mk(messages.cancel, 'bre-brew-link-cancel');
+    if (onRemove) {
+      const removeBtn = mk(messages.remove, 'bre-brew-link-remove');
+      removeBtn.addEventListener('click', () => { close(true); onRemove(); });
+      actions.appendChild(removeBtn);
+    }
+    actions.append(cancelBtn, saveBtn);
+    dialog.appendChild(actions);
+
+    let outsideTimer = null;
+    const outside = (e) => { if (!dialog.contains(e.target)) close(false); };
+
+    function close(restoreFocus) {
+      clearTimeout(outsideTimer);
+      document.removeEventListener('mousedown', outside);
+      dialog.remove();
+      if (activeDialog && activeDialog.dialog === dialog) activeDialog = null;
+      if (restoreFocus && !destroyed) {
+        surface.focus();
+        if (savedRange) {
+          const s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(savedRange);
+        }
+      }
+    }
+
+    saveBtn.addEventListener('click', () => {
+      const values = {};
+      for (const k of Object.keys(inputs)) values[k] = inputs[k].value.trim();
+      for (const input of Object.values(inputs)) input.removeAttribute('aria-invalid');
+      const bad = validate ? validate(values) : [];
+      if (bad.length) {
+        for (const k of bad) inputs[k].setAttribute('aria-invalid', 'true');
+        inputs[bad[0]].focus();
+        return;
+      }
+      close(true);
+      onSave(values);
+    });
+    cancelBtn.addEventListener('click', () => close(true));
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+      else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); saveBtn.click(); }
+    });
+
+    root.appendChild(dialog);
+    // Deferred: the mousedown that opened the dialog is still bubbling.
+    outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
+    activeDialog = { dialog, close };
+    const first = Object.values(inputs)[0];
+    if (first) first.focus();
+  }
+
+  function openLinkDialog({ text, url }, savedRange, onSave, onRemove) {
+    openDialog({
+      className: 'bre-brew-link-dialog',
+      label: messages.linkDialog,
+      savedRange,
+      fields: [
+        { key: 'text', placeholder: messages.linkText, value: text },
+        { key: 'url', type: 'url', placeholder: messages.linkUrl, value: url },
+      ],
+      validate: (v) => {
+        const bad = [];
+        if (!v.text) bad.push('text');
+        if (!v.url || !sanitizeURL(v.url)) bad.push('url');
+        return bad;
+      },
+      onSave: (v) => onSave({ text: v.text, url: sanitizeURL(v.url) }),
+      onRemove,
+    });
+  }
+
+  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave) {
+    const fields = [{
+      key: 'src', placeholder: type === 'image' ? messages.imageUrl : type === 'audio' ? messages.audioUrl : messages.videoUrl, value: src,
+    }];
+    if (type === 'image') fields.push({ key: 'alt', placeholder: messages.altText, value: alt });
+    fields.push({ key: 'caption', placeholder: messages.caption, value: caption });
+    openDialog({
+      className: 'bre-brew-link-dialog bre-brew-media-dialog',
+      label: messages.mediaDialog,
+      savedRange,
+      fields,
+      validate: (v) => (v.src && (sanitizeURL(v.src) || brewGetEmbedUrl(v.src, opts.embedAllowlist)) ? [] : ['src']),
+      onSave: (v) => onSave({ src: v.src, alt: v.alt || '', caption: v.caption || '' }),
+    });
+  }
+
+  const currentRange = () => {
+    const sel = window.getSelection();
+    return sel && sel.rangeCount > 0 && surface.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+  };
 
   function insertLink(text, url) {
-    // Delete selected content first (avoids double-text when selection existed)
     const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-      sel.deleteFromDocument();
-    }
-    // Insert the label text, then select it and apply createLink
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) sel.deleteFromDocument();
     document.execCommand('insertText', false, text);
-    // Re-select the just-inserted text so createLink wraps it
     const sel2 = window.getSelection();
     if (sel2 && sel2.rangeCount > 0) {
       const range = sel2.getRangeAt(0);
       const node = range.startContainer;
       if (node.nodeType === Node.TEXT_NODE) {
         const end = range.startOffset;
-        const start = Math.max(0, end - text.length);
-        const newRange = document.createRange();
-        newRange.setStart(node, start);
-        newRange.setEnd(node, end);
+        const r = document.createRange();
+        r.setStart(node, Math.max(0, end - text.length));
+        r.setEnd(node, end);
         sel2.removeAllRanges();
-        sel2.addRange(newRange);
+        sel2.addRange(r);
       }
     }
     document.execCommand('createLink', false, url);
-    // Add target/rel to the newly created anchor
     const sel3 = window.getSelection();
     if (sel3 && sel3.rangeCount > 0) {
       let node = sel3.getRangeAt(0).commonAncestorContainer;
@@ -799,129 +996,54 @@ export function createBrewEditor(container, options = {}) {
     }
   }
 
-  /**
-   * Show a small inline link dialog near the toolbar.
-   * opts: { text, url, showRemove }
-   * onSave(({ text, url }) => void)
-   * onRemove(() => void) — optional
-   */
-  function showLinkDialog(opts, onSave, onRemove) {
-    // Remove any existing dialog
-    const existing = root.querySelector('.bre-brew-link-dialog');
-    if (existing) existing.remove();
-
-    const dialog = document.createElement('div');
-    dialog.className = 'bre-brew-link-dialog';
-
-    const textField = document.createElement('input');
-    textField.type = 'text';
-    textField.placeholder = 'Text';
-    textField.value = opts.text || '';
-    textField.className = 'bre-brew-link-input';
-
-    const urlField = document.createElement('input');
-    urlField.type = 'url';
-    urlField.placeholder = 'https://...';
-    urlField.value = opts.url || '';
-    urlField.className = 'bre-brew-link-input';
-
-    const actions = document.createElement('div');
-    actions.className = 'bre-brew-link-actions';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
-    saveBtn.textContent = 'Save';
-    saveBtn.className = 'bre-brew-link-save';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.className = 'bre-brew-link-cancel';
-
-    // Layout: [Remove (edit only)] ··· [Cancel] [Save]
-    if (onRemove) {
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.textContent = 'Remove';
-      removeBtn.className = 'bre-brew-link-remove';
-      removeBtn.addEventListener('click', () => {
-        dialog.remove();
-        onRemove();
-      });
-      actions.appendChild(removeBtn);
-    }
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(saveBtn);
-
-    dialog.appendChild(textField);
-    dialog.appendChild(urlField);
-    dialog.appendChild(actions);
-    root.appendChild(dialog);
-    textField.focus();
-
-    function close() { dialog.remove(); }
-
-    saveBtn.addEventListener('click', () => {
-      const text = textField.value.trim();
-      const url = urlField.value.trim();
-      if (!text || !url) return;
-      const safe = sanitizeURL(url);
-      if (!safe) { urlField.style.outline = '2px solid red'; return; }
-      close();
-      onSave({ text, url: safe });
+  function openLinkFromToolbar() {
+    if (readOnly) return;
+    const savedRange = currentRange();
+    openLinkDialog({ text: savedRange ? savedRange.toString() : '', url: '' }, savedRange, ({ text, url }) => {
+      surface.focus();
+      if (savedRange) {
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(savedRange);
+      }
+      insertLink(text, url);
+      scheduleChange();
     });
-
-    cancelBtn.addEventListener('click', close);
-
-    // Close on Escape
-    dialog.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') close();
-      if (e.key === 'Enter') saveBtn.click();
-    });
-
-    // Close on outside click
-    setTimeout(() => {
-      document.addEventListener('mousedown', function outsideClick(e) {
-        if (!dialog.contains(e.target)) {
-          close();
-          document.removeEventListener('mousedown', outsideClick);
-        }
-      });
-    }, 0);
   }
+  listen(btnLink, 'mousedown', (e) => { e.preventDefault(); openLinkFromToolbar(); });
+  listen(btnLink, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLinkFromToolbar(); } });
 
-  btnFormula.addEventListener('mousedown', (e) => {
-    e.preventDefault();
+  // ── Insert buttons ─────────────────────────────────────────────────────────
+
+  function insertDivider() {
+    if (readOnly) return;
     surface.focus();
-    const latex = prompt('Enter LaTeX formula:');
-    if (!latex) return;
-    insertFormula(latex);
-    debouncedSync();
-  });
+    document.execCommand('insertHTML', false, '<hr data-bre-type="divider"><p><br></p>');
+    scheduleChange();
+  }
+  listen(btnDivider, 'mousedown', (e) => { e.preventDefault(); insertDivider(); });
+  listen(btnDivider, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); insertDivider(); } });
 
   function insertFormula(latex) {
-    const katex = getKaTeX();
-    if (!katex) {
-      // KaTeX chunk still loading — retry once it's ready (button click, so delay is fine).
-      katexReady.then(() => insertFormula(latex));
-      return;
-    }
-    try {
-      const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
-      const safe = sanitizeHTML(rendered, { allowKaTeX: true });
-      const escapedLatex = latex.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-      document.execCommand(
-        'insertHTML',
-        false,
-        `<span data-bre-type="formula" data-bre-latex="${escapedLatex}" contenteditable="false">${safe}</span>&nbsp;`
-      );
-    } catch (err) {
-      console.warn('[bre] BREW formula render error:', err);
-    }
+    loadKaTeX().then(() => {
+      if (destroyed) return;
+      const rendered = renderKatex(latex, false);
+      surface.focus();
+      document.execCommand('insertHTML', false,
+        sanitizeHTML(formulaSpanHTML(latex, false, rendered), { allowKaTeX: true, allowMedia: true }) + '&nbsp;');
+      scheduleChange();
+    });
   }
+  function promptFormula() {
+    if (readOnly) return;
+    surface.focus();
+    const latex = window.prompt(messages.formulaPrompt);
+    if (latex) insertFormula(latex);
+  }
+  listen(btnFormula, 'mousedown', (e) => { e.preventDefault(); promptFormula(); });
+  listen(btnFormula, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); promptFormula(); } });
 
-  // ── Table actions (add/remove rows & cols) ─────────────────────────────────
+  // ── Table actions ──────────────────────────────────────────────────────────
 
   function reindexTable(table) {
     table.querySelectorAll('tr').forEach((tr, rowIndex) => {
@@ -932,43 +1054,36 @@ export function createBrewEditor(container, options = {}) {
     });
   }
 
+  function makeCell(tag, placeholder) {
+    const cell = document.createElement(tag);
+    cell.className = 'bre-table-cell';
+    cell.setAttribute('contenteditable', 'true');
+    cell.setAttribute('data-bre-placeholder', placeholder);
+    return cell;
+  }
+
   function handleTableAction(action, wrapper) {
     const table = wrapper.querySelector('table');
     if (!table) return;
-
     if (action === 'add-row') {
       const firstRow = table.querySelector('tr');
       const colCount = firstRow ? firstRow.querySelectorAll('th, td').length : 2;
       let tbody = table.querySelector('tbody');
       if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
       const tr = document.createElement('tr');
-      for (let c = 0; c < colCount; c++) {
-        const td = document.createElement('td');
-        td.className = 'bre-table-cell';
-        td.setAttribute('contenteditable', 'true');
-        td.setAttribute('data-bre-placeholder', 'Cell');
-        tr.appendChild(td);
-      }
+      for (let c = 0; c < colCount; c++) tr.appendChild(makeCell('td', messages.tableCell));
       tbody.appendChild(tr);
       reindexTable(table);
-
     } else if (action === 'del-row') {
       const tbody = table.querySelector('tbody');
       if (!tbody) return;
       const rows = tbody.querySelectorAll('tr');
       if (rows.length > 0) rows[rows.length - 1].remove();
-
     } else if (action === 'add-col') {
-      table.querySelectorAll('tr').forEach((tr, rowIndex) => {
-        const isHeader = rowIndex === 0;
-        const cell = document.createElement(isHeader ? 'th' : 'td');
-        cell.className = 'bre-table-cell';
-        cell.setAttribute('contenteditable', 'true');
-        cell.setAttribute('data-bre-placeholder', isHeader ? 'Header' : 'Cell');
-        tr.appendChild(cell);
+      table.querySelectorAll('tr').forEach((tr, ri) => {
+        tr.appendChild(makeCell(ri === 0 ? 'th' : 'td', ri === 0 ? messages.tableHeader : messages.tableCell));
       });
       reindexTable(table);
-
     } else if (action === 'del-col') {
       table.querySelectorAll('tr').forEach(tr => {
         const cells = tr.querySelectorAll('th, td');
@@ -977,370 +1092,350 @@ export function createBrewEditor(container, options = {}) {
     }
   }
 
-  // Delegate input events from table cells (contenteditable="true" islands inside
-  // contenteditable="false" wrappers don't bubble to the surface's input listener).
-  root.addEventListener('input', (e) => {
-    if (e.target.closest('[data-bre-type="table"]')) {
-      debouncedSync();
-    }
-  });
-
-  // ── Table insert + edit ────────────────────────────────────────────────────
-
-  btnTable.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    insertMediaBlock({ type: 'table' });
-  });
-
-  /**
-   * Insert a new media/table figure block after the current cursor position.
-   */
   function insertMediaBlock(block) {
     const id = generateId();
-    const html = blockToSurfaceHTMLSnippet({ ...block, id }, opts.embedAllowlist);
-    const safe = sanitizeHTML(html, { allowKaTeX: false, allowMedia: true });
+    const snippet = snippetFor({ ...block, id }, id);
+    const safe = sanitizeHTML(snippet, { allowKaTeX: false, allowMedia: true });
     surface.focus();
     document.execCommand('insertHTML', false, safe + '<p><br></p>');
-    debouncedSync();
+    scheduleChange();
   }
 
-  /**
-   * Show a dialog to edit a media figure (image/audio/video).
-   */
+  const onTable = (e) => { e.preventDefault(); if (!readOnly) insertMediaBlock({ type: 'table', data: {} }); };
+  listen(btnTable, 'mousedown', onTable);
+  listen(btnTable, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') onTable(e); });
+
   function showMediaDialog(figureEl) {
-    const type = figureEl.dataset.breType;
-
-    // Image / Audio / Video: edit src + caption
-    showMediaSrcDialog(
-      {
-        src: figureEl.dataset.breSrc || '',
-        alt: type === 'image' ? (figureEl.dataset.breAlt || '') : null,
-        caption: figureEl.dataset.breCaption || '',
-        type,
-      },
-      ({ src, alt, caption }) => {
-        const safe = sanitizeURL(src);
-        figureEl.dataset.breSrc = safe;
-        if (type === 'image') figureEl.dataset.breAlt = alt || '';
-        figureEl.dataset.breCaption = caption || '';
-
-        // Re-render the inner media element
-        const newSnippet = blockToSurfaceHTMLSnippet(
-          { id: figureEl.dataset.breId, type, data: { src: safe, alt: alt || '', caption: caption || '' } },
-          opts.embedAllowlist
-        );
-        const tmp = document.createElement('div');
-        tmp.innerHTML = sanitizeHTML(newSnippet, { allowKaTeX: false, allowMedia: true });
-        const newFig = tmp.firstElementChild;
-        if (newFig && figureEl.parentNode) {
-          figureEl.parentNode.replaceChild(newFig, figureEl);
-        }
-        debouncedSync();
-      }
-    );
+    const type = figureEl.getAttribute('data-bre-type');
+    openMediaDialog({
+      src: figureEl.getAttribute('data-bre-src') || '',
+      alt: type === 'image' ? (figureEl.getAttribute('data-bre-alt') || '') : null,
+      caption: figureEl.getAttribute('data-bre-caption') || '',
+      type,
+    }, null, ({ src, alt, caption }) => {
+      const safe = sanitizeURL(src) || src;
+      const node = snippetToNode(snippetFor(
+        { type, data: { src: safe, alt, caption } }, figureEl.getAttribute('data-bre-id') || generateId(),
+      ));
+      if (node && figureEl.parentNode) figureEl.parentNode.replaceChild(node, figureEl);
+      scheduleChange();
+    });
   }
 
-  /**
-   * Small inline dialog to edit src (+ alt for images) + caption for media blocks.
-   */
-  function showMediaSrcDialog({ src, alt, caption, type }, onSave) {
-    const existing = root.querySelector('.bre-brew-media-dialog');
-    if (existing) existing.remove();
-
-    const dialog = document.createElement('div');
-    dialog.className = 'bre-brew-link-dialog bre-brew-media-dialog';
-
-    function makeField(placeholder, value) {
-      const f = document.createElement('input');
-      f.type = 'text';
-      f.placeholder = placeholder;
-      f.value = value || '';
-      f.className = 'bre-brew-link-input';
-      dialog.appendChild(f);
-      return f;
-    }
-
-    const srcField     = makeField(type === 'image' ? 'Image URL' : type === 'audio' ? 'Audio URL' : 'Video URL or YouTube/Vimeo link', src);
-    const altField     = type === 'image' ? makeField('Alt text', alt) : null;
-    const captionField = makeField('Caption (optional)', caption);
-
-    const actions = document.createElement('div');
-    actions.className = 'bre-brew-link-actions';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
-    saveBtn.textContent = 'Save';
-    saveBtn.className = 'bre-brew-link-save';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.className = 'bre-brew-link-cancel';
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(saveBtn);
-    dialog.appendChild(actions);
-    root.appendChild(dialog);
-    srcField.focus();
-
-    function close() { dialog.remove(); }
-    saveBtn.addEventListener('click', () => {
-      const newSrc = srcField.value.trim();
-      if (!newSrc) { srcField.style.outline = '2px solid red'; return; }
-      const safe = sanitizeURL(newSrc);
-      if (!safe && !brewGetEmbedUrl(newSrc, opts.embedAllowlist)) {
-        srcField.style.outline = '2px solid red';
-        return;
-      }
-      close();
-      onSave({ src: newSrc, alt: altField ? altField.value.trim() : '', caption: captionField.value.trim() });
-    });
-    cancelBtn.addEventListener('click', close);
-    dialog.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') close();
-      if (e.key === 'Enter') saveBtn.click();
-    });
-    setTimeout(() => {
-      document.addEventListener('mousedown', function outsideClick(e) {
-        if (!dialog.contains(e.target)) {
-          close();
-          document.removeEventListener('mousedown', outsideClick);
-        }
+  for (const [btn, type] of [[btnImage, 'image'], [btnAudio, 'audio'], [btnVideo, 'video']]) {
+    const open = (e) => {
+      e.preventDefault();
+      if (readOnly) return;
+      const savedRange = currentRange();
+      openMediaDialog({ src: '', alt: '', caption: '', type }, savedRange, ({ src, alt, caption }) => {
+        insertMediaBlock({ type, data: { src, alt, caption } });
       });
-    }, 0);
+    };
+    listen(btn, 'mousedown', open);
+    listen(btn, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') open(e); });
   }
 
-  // Image / Audio / Video toolbar buttons
-  btnImage.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    showMediaSrcDialog({ src: '', alt: '', caption: '', type: 'image' }, ({ src, alt, caption }) => {
-      insertMediaBlock({ type: 'image', data: { src, alt, caption } });
-    });
-  });
+  // ── Surface click: links, table controls, media, formulas ───────────────────
 
-  btnAudio.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    showMediaSrcDialog({ src: '', caption: '', type: 'audio' }, ({ src, caption }) => {
-      insertMediaBlock({ type: 'audio', data: { src, caption } });
-    });
-  });
+  listen(surface, 'click', (e) => {
+    if (readOnly) return; // links navigate natively, nothing else is interactive
 
-  btnVideo.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    showMediaSrcDialog({ src: '', caption: '', type: 'video' }, ({ src, caption }) => {
-      insertMediaBlock({ type: 'video', data: { src, caption } });
-    });
-  });
-
-  // ── Formula click-to-edit ──────────────────────────────────────────────────
-
-  surface.addEventListener('click', (e) => {
-    // Click-to-edit links
     const anchorEl = e.target.closest('a');
     if (anchorEl && surface.contains(anchorEl)) {
       e.preventDefault();
-      showLinkDialog(
-        { text: anchorEl.textContent || '', url: anchorEl.getAttribute('href') || '' },
+      openLinkDialog(
+        { text: anchorEl.textContent || '', url: anchorEl.getAttribute('href') || '' }, null,
         ({ text, url }) => {
           anchorEl.textContent = text;
           anchorEl.setAttribute('href', url);
-          debouncedSync();
+          scheduleChange();
         },
         () => {
           anchorEl.replaceWith(document.createTextNode(anchorEl.textContent || ''));
-          debouncedSync();
-        }
+          scheduleChange();
+        },
       );
       return;
     }
 
-    // Table control buttons (+ Row, − Row, + Col, − Col)
     const tableActionBtn = e.target.closest('[data-bre-table-action]');
     if (tableActionBtn && surface.contains(tableActionBtn)) {
       e.preventDefault();
-      const action = tableActionBtn.getAttribute('data-bre-table-action');
-      const tableWrapper = tableActionBtn.closest('[data-bre-type="table"]');
-      if (tableWrapper) {
-        handleTableAction(action, tableWrapper);
-        debouncedSync();
+      const wrapper = tableActionBtn.closest('[data-bre-type="table"]');
+      if (wrapper) {
+        handleTableAction(tableActionBtn.getAttribute('data-bre-table-action'), wrapper);
+        scheduleChange();
       }
       return;
     }
 
-    // Click-to-edit media figures (image/audio/video)
     const mediaFigure = e.target.closest('figure[data-bre-type]');
-    if (mediaFigure && surface.contains(mediaFigure)) {
-      const mtype = mediaFigure.dataset.breType;
-      if (['image', 'audio', 'video'].includes(mtype)) {
-        e.preventDefault();
-        showMediaDialog(mediaFigure);
-        return;
-      }
+    if (mediaFigure && surface.contains(mediaFigure) &&
+        ['image', 'audio', 'video'].includes(mediaFigure.getAttribute('data-bre-type'))) {
+      e.preventDefault();
+      showMediaDialog(mediaFigure);
+      return;
     }
 
     const formulaEl = e.target.closest('[data-bre-type="formula"]');
     if (!formulaEl) return;
-    const currentLatex = formulaEl.getAttribute('data-bre-latex') || '';
-    const latex = prompt('Edit LaTeX formula:', currentLatex);
-    if (latex === null) return; // cancelled
-    if (!latex.trim()) {
-      formulaEl.remove();
-      debouncedSync();
-      return;
-    }
-    const katex = getKaTeX();
-    if (!katex) return;
-    try {
-      const rendered = katex.renderToString(latex, { throwOnError: false, output: 'html' });
-      const safe = sanitizeHTML(rendered, { allowKaTeX: true });
-      const escapedLatex = latex.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const latex = window.prompt(messages.formulaEditPrompt, formulaEl.getAttribute('data-bre-latex') || '');
+    if (latex === null) return;
+    if (!latex.trim()) { formulaEl.remove(); scheduleChange(); return; }
+    loadKaTeX().then(() => {
+      if (destroyed) return;
+      const rendered = renderKatex(latex, formulaEl.getAttribute('data-bre-display') !== 'false');
       formulaEl.setAttribute('data-bre-latex', latex);
-      formulaEl.innerHTML = safe;
-      // Re-sanitize by reassigning escaped attribute
-      formulaEl.setAttribute('data-bre-latex', escapedLatex);
-    } catch (err) {
-      console.warn('[bre] BREW formula edit error:', err);
-    }
-    debouncedSync();
+      if (rendered != null) formulaEl.innerHTML = rendered; // sanitized by renderKatex
+      else formulaEl.textContent = `$${latex}$`;
+      scheduleChange();
+    });
   });
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
-  surface.addEventListener('keydown', (e) => {
+  listen(surface, 'keydown', (e) => {
+    if (readOnly) return;
     const isMod = e.ctrlKey || e.metaKey;
-
-    if (isMod && e.key === 'b') {
+    const k = e.key.toLowerCase();
+    if (isMod && (k === 'b' || k === 'i' || k === 'u')) {
       e.preventDefault();
-      if (currentBlockHasInline()) document.execCommand('bold');
-      updateToolbarState();
+      applyMark(k === 'b' ? 'bold' : k === 'i' ? 'italic' : 'underline');
       return;
     }
-    if (isMod && e.key === 'i') {
-      e.preventDefault();
-      if (currentBlockHasInline()) document.execCommand('italic');
-      updateToolbarState();
-      return;
-    }
-    if (isMod && e.key === 'u') {
-      e.preventDefault();
-      if (currentBlockHasInline()) document.execCommand('underline');
-      updateToolbarState();
-      return;
-    }
-
-    // Enter in code block: insert literal newline
     if (e.key === 'Enter') {
       const blockEl = getAnchorBlockEl();
       if (blockEl && blockEl.nodeName === 'PRE') {
         e.preventDefault();
         document.execCommand('insertText', false, '\n');
-        return;
       }
-      // Enter in list items: let browser handle natively
     }
   });
 
   // ── Paste ──────────────────────────────────────────────────────────────────
 
-  surface.addEventListener('paste', (e) => {
+  listen(surface, 'paste', (e) => {
     e.preventDefault();
+    if (readOnly || !e.clipboardData) return;
+    const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
-    if (text) {
-      document.execCommand('insertText', false, text);
+    if (html && html.trim()) {
+      const safe = sanitizeHTML(cleanPastedHTML(html)); // DOMPurify after cleaning
+      if (safe.replace(/<[^>]*>/g, '').trim() || /<img\b/i.test(safe)) {
+        document.execCommand('insertHTML', false, safe);
+        return;
+      }
     }
+    if (text) document.execCommand('insertText', false, text);
   });
 
-  // ── Selection state ────────────────────────────────────────────────────────
+  // ── Input / empty-state ────────────────────────────────────────────────────
 
-  document.addEventListener('selectionchange', onSelectionChange);
-  surface.addEventListener('keyup', updateToolbarState);
-  surface.addEventListener('mouseup', updateToolbarState);
+  listen(root, 'input', (e) => {
+    if (!surface.contains(e.target)) return; // ignore dialog inputs
+    // Keep the surface truly :empty when blank so the placeholder CSS can match.
+    if (surface.childNodes.length === 1) {
+      const n = surface.firstChild;
+      if (n.nodeType === 1 && (n.nodeName === 'P' || n.nodeName === 'DIV') &&
+          (!n.getAttribute('data-bre-type') || n.getAttribute('data-bre-type') === 'paragraph') &&
+          !(n.textContent || '') &&
+          (n.childElementCount === 0 || (n.childElementCount === 1 && n.firstElementChild.nodeName === 'BR'))) {
+        surface.replaceChildren();
+      }
+    }
+    scheduleChange();
+  });
+
+  // ── Focus / selection events ───────────────────────────────────────────────
+
+  listen(root, 'focusin', (e) => {
+    if (!e.relatedTarget || !root.contains(e.relatedTarget)) emitter.emit('focus', e);
+  });
+  listen(root, 'focusout', (e) => {
+    if (!e.relatedTarget || !root.contains(e.relatedTarget)) emitter.emit('blur', e);
+  });
+
+  const raf = (fn) => (window.requestAnimationFrame ? window.requestAnimationFrame(fn) : setTimeout(fn, 16));
+  const cancelRaf = (h) => (window.cancelAnimationFrame ? window.cancelAnimationFrame(h) : clearTimeout(h));
 
   function onSelectionChange() {
-    // Only update if selection is within our surface
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const node = sel.anchorNode;
-    if (node && surface.contains(node)) {
+    if (selRaf != null) return;
+    selRaf = raf(() => {
+      selRaf = null;
+      if (destroyed) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !sel.anchorNode || !surface.contains(sel.anchorNode)) return;
       updateToolbarState();
+      const el = getAnchorBlockEl();
+      emitter.emit('selectionchange', {
+        blockId: el ? el.getAttribute('data-bre-id') : null,
+        collapsed: sel.isCollapsed,
+      });
+    });
+  }
+  listen(document, 'selectionchange', onSelectionChange);
+
+  // ── Read-only ──────────────────────────────────────────────────────────────
+
+  function applyIslandsReadOnly() {
+    for (const cell of surface.querySelectorAll('[data-bre-table-row]')) {
+      cell.setAttribute('contenteditable', readOnly ? 'false' : 'true');
     }
+    for (const c of surface.querySelectorAll('.bre-table-controls')) c.hidden = readOnly;
   }
 
-  // ── Debounced model sync ────────────────────────────────────────────────────
-
-  const debouncedSync = debounce(() => syncToModel(), 400);
-
-  function syncToModel() {
-    _blocks = surfaceToBlocks(surface);
-    _docMeta.updated = Date.now();
-    if (opts.onChange) {
-      opts.onChange(getDoc());
+  function applyReadOnly() {
+    surface.setAttribute('contenteditable', readOnly ? 'false' : 'true');
+    surface.setAttribute('aria-readonly', readOnly ? 'true' : 'false');
+    if (readOnly) {
+      toolbar.remove();
+      root.setAttribute('data-bre-readonly', 'true');
+      if (activeDialog) activeDialog.close(false);
+    } else {
+      root.removeAttribute('data-bre-readonly');
+      root.insertBefore(toolbar, surface);
     }
+    applyIslandsReadOnly();
   }
-
-  surface.addEventListener('input', () => {
-    debouncedSync();
-  });
-
-  // ── Internal document helpers ───────────────────────────────────────────────
-
-  function getDoc() {
-    return {
-      ..._docMeta,
-      blocks: _blocks.map(b => ({ ...b })),
-    };
-  }
+  surface.setAttribute('contenteditable', readOnly ? 'false' : 'true');
+  surface.setAttribute('aria-readonly', readOnly ? 'true' : 'false');
+  if (readOnly) root.setAttribute('data-bre-readonly', 'true');
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
+  function getDoc() {
+    buildModel();
+    return { ..._docMeta, blocks: _blocks.map(cloneBlock) };
+  }
+
+  /** Returns the document. Cheap on repeat calls: only changed units are re-read. */
   function getJSON() {
-    // Sync before returning
-    _blocks = surfaceToBlocks(surface);
     return getDoc();
   }
 
+  /** Accepts BRE blocks and/or 'markdown' blocks. Does not fire 'change'. */
   function setJSON(doc) {
     if (!doc || !Array.isArray(doc.blocks)) {
-      console.warn('[bre] BREW setJSON: invalid document');
+      console.warn('[bre] BREW setJSON: ' + messages.invalidDocument);
       return;
     }
+    clearTimeout(changeTimer);
+    changeTimer = null;
     _docMeta = {
       id: doc.id || _docMeta.id,
-      version: doc.version || 1,
+      version: Number(doc.version) || 1,
       created: doc.created || Date.now(),
       updated: Date.now(),
     };
-    _blocks = doc.blocks.map(b => ({ ...b }));
+    const blocks = normalizeBlocks(doc.blocks);
+    const flags = { formula: false };
+    const plans = [];
+    for (const b of blocks) {
+      const pl = planBlock(b, flags);
+      if (pl) plans.push(pl);
+    }
+    // Phase 2: one DOMPurify call for all text markup, one for all media/table snippets.
+    const textIdx = [];
+    const snipIdx = [];
+    plans.forEach((pl, i) => {
+      if (!pl.pending) return;
+      (pl.snippet != null ? snipIdx : textIdx).push(i);
+    });
+    const textOut = sanitizeBatch(textIdx.map(i => plans[i].html));
+    textIdx.forEach((i, k) => { plans[i].html = textOut[k]; });
+    const snipOut = sanitizeBatch(snipIdx.map(i => plans[i].snippet), { allowKaTeX: false, allowMedia: true });
+    snipIdx.forEach((i, k) => { plans[i].snippet = snipOut[k]; });
 
-    const html = blocksToSurfaceHTML(_blocks, opts.embedAllowlist);
-    // Use DOMPurify via sanitizeHTML with a permissive profile to allow data-bre-* attributes
-    const safe = sanitizeHTML(html, { allowKaTeX: false, allowMedia: true });
-    surface.innerHTML = safe;
+    const frag = document.createDocumentFragment();
+    let list = null;
+    for (const pl of plans) {
+      const isList = pl.b.type === 'bulleted_list' || pl.b.type === 'numbered_list';
+      const node = nodeFromPlan(pl, flags);
+      if (!node) continue;
+      if (isList) {
+        const tag = pl.b.type === 'bulleted_list' ? 'UL' : 'OL';
+        if (!list || list.nodeName !== tag) {
+          list = document.createElement(tag.toLowerCase());
+          frag.appendChild(list);
+        }
+        list.appendChild(node);
+      } else {
+        list = null;
+        frag.appendChild(node);
+      }
+    }
+    surface.replaceChildren(frag);
+    observer.takeRecords(); // our own render isn't a user edit
+    modelDirty = true;
+    applyIslandsReadOnly();
+    afterLoad(flags);
     updateToolbarState();
   }
 
   function getHTML() {
-    _blocks = surfaceToBlocks(surface);
-    const raw = blocksToHTML(_blocks);
-    return sanitizeHTML(raw, { allowKaTeX: false, allowMedia: true });
+    buildModel();
+    const parts = [];
+    let open = null;
+    for (const u of _units) {
+      const t = u.block.type;
+      const want = t === 'bulleted_list' ? 'ul' : t === 'numbered_list' ? 'ol' : null;
+      if (open && open !== want) { parts.push(`</${open}>`); open = null; }
+      if (want && !open) { parts.push(`<${want}>`); open = want; }
+      if (u.html == null) u.html = blockToHTML(u.block, { trusted: true });
+      if (u.html) parts.push(u.html);
+    }
+    if (open) parts.push(`</${open}>`);
+    return parts.join('\n');
   }
 
+  /** Does not fire 'change'. */
   function setHTML(html) {
     if (typeof html !== 'string') return;
-    const blocks = htmlToBlocks(html);
-    setJSON({
-      id: _docMeta.id,
-      version: _docMeta.version,
-      created: _docMeta.created,
-      updated: Date.now(),
-      blocks: blocks.length > 0 ? blocks : [{ id: generateId(), type: 'paragraph', data: { html: '' } }],
-    });
+    setJSON({ id: _docMeta.id, version: _docMeta.version, created: _docMeta.created, blocks: htmlToBlocks(html) });
+  }
+
+  function setReadOnly(v) {
+    v = !!v;
+    if (v === readOnly) return;
+    readOnly = v;
+    if (readOnly) { clearTimeout(changeTimer); changeTimer = null; }
+    applyReadOnly();
+  }
+
+  function isEmpty() {
+    if ((surface.textContent || '').trim()) return false;
+    return !surface.querySelector('img,audio,video,iframe,hr,table,figure,[data-bre-type="formula"]');
+  }
+
+  function focus() { surface.focus(); }
+  function blur() {
+    if (document.activeElement && root.contains(document.activeElement)) document.activeElement.blur();
   }
 
   function destroy() {
-    document.removeEventListener('selectionchange', onSelectionChange);
+    if (destroyed) return;
+    destroyed = true;
+    clearTimeout(changeTimer);
+    changeTimer = null;
+    if (selRaf != null) cancelRaf(selRaf);
+    selRaf = null;
+    if (activeDialog) activeDialog.close(false);
+    observer.disconnect();
+    cleanups.forEach(fn => fn());
+    cleanups.length = 0;
+    if (emitter._listeners) emitter._listeners.clear();
     root.remove();
   }
 
-  return { getJSON, setJSON, getHTML, setHTML, destroy };
+  const api = {
+    getJSON, setJSON, getHTML, setHTML, destroy,
+    setReadOnly,
+    isReadOnly: () => readOnly,
+    focus, blur, isEmpty,
+    on: (ev, fn) => emitter.on(ev, fn),
+    off: (ev, fn) => emitter.off(ev, fn),
+  };
+
+  queueMicrotask(() => { if (!destroyed) emitter.emit('ready', api); });
+  return api;
 }

@@ -4,8 +4,9 @@
 import { katexReady, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { elt, escapeHTML } from '../utils/dom.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 
-ensureKaTeXStyles();
+
 
 function renderLatexInto(wrapper, latex, displayMode) {
   const katex = getKaTeX();
@@ -18,7 +19,8 @@ function renderLatexInto(wrapper, latex, displayMode) {
 }
 
 blockRegistry.register('formula', {
-  render(block) {
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
     const latex = (block.data && block.data.latex) || '';
     const displayMode = block.data && block.data.displayMode != null ? block.data.displayMode : true;
 
@@ -31,7 +33,7 @@ blockRegistry.register('formula', {
     wrapper.dataset.breLatex = latex;
 
     if (!latex) {
-      wrapper.appendChild(elt('span', { class: 'bre-formula-placeholder' }, 'Click to add formula…'));
+      wrapper.appendChild(elt('span', { class: 'bre-formula-placeholder' }, m.formulaEmpty));
       return wrapper;
     }
 

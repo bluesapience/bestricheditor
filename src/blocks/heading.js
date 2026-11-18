@@ -2,19 +2,20 @@
  * Heading block plugin (supports levels 1-6).
  */
 import { blockRegistry } from '../core/blockRegistry.js';
-import { escapeHTML } from '../utils/dom.js';
+import { escapeHTML, setInlineContent } from '../utils/dom.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 import { sanitizeHTML } from '../utils/sanitize.js';
 
 blockRegistry.register('heading', {
-  render(block) {
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
     const level = (block.data && block.data.level) || 1;
     const el = document.createElement(`h${level}`);
     el.className = `bre-block-content bre-heading bre-heading--${level}`;
     el.setAttribute('contenteditable', 'true');
     el.setAttribute('data-bre-field', 'html');
-    el.setAttribute('data-bre-placeholder', `Heading ${level}`);
-    const rawHTML = block.data?.html ?? escapeHTML(block.data?.text ?? '');
-    el.innerHTML = sanitizeHTML(rawHTML);
+    el.setAttribute('data-bre-placeholder', m.heading.replace('{n}', String(level)));
+    setInlineContent(el, block.data);
     return el;
   },
 
