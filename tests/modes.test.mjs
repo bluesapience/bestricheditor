@@ -186,3 +186,119 @@ test('BREW: typing into a bare text node gets wrapped in a paragraph', () => {
   assert.equal(surface.firstElementChild.textContent, 'typed on a bare line');
   ed.destroy();
 });
+
+// ── BREW: select / delete blocks ─────────────────────────────────────────────
+const brewDoc = () => doc([
+  { id: 'p1', type: 'paragraph', data: { html: 'before' } },
+  { id: 'img', type: 'image', data: { src: 'https://example.com/a.png', alt: 'a', caption: '' } },
+  { id: 'hr', type: 'divider', data: {} },
+  { id: 'tbl', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } },
+  { id: 'p2', type: 'paragraph', data: { html: 'after' } },
+]);
+const brewTypes = (ed) => ed.getJSON().blocks.map((b) => b.type);
+const ev = (el, type, props = {}) => {
+  const e = new window.Event(type, { bubbles: true, cancelable: true });
+  Object.assign(e, props);
+  el.dispatchEvent(e);
+  return e;
+};
+
+test('BREW: click selects media (no dialog); Backspace deletes it', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const fig = host.querySelector('figure[data-bre-type="image"]');
+  ev(fig.querySelector('img') || fig, 'click');
+  assert.ok(fig.hasAttribute('data-bre-selected'), 'selected');
+  assert.equal(host.querySelector('.bre-brew-media-dialog'), null, 'a click never opens the dialog');
+  ev(fig, 'keydown', { key: 'Backspace' });
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['paragraph', 'divider', 'table', 'paragraph']);
+  ed.destroy();
+});
+
+test('BREW: divider click-select + Delete; Escape deselects; focusing elsewhere deselects', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const hr = host.querySelector('.bre-brew-surface hr');
+  ev(hr, 'click');
+  assert.ok(hr.hasAttribute('data-bre-selected'));
+  ev(hr, 'keydown', { key: 'Escape' });
+  assert.ok(!hr.hasAttribute('data-bre-selected'));
+  ev(hr, 'click');
+  ev(host.querySelector('.bre-brew-surface p'), 'focusin');
+  assert.ok(!hr.hasAttribute('data-bre-selected'));
+  ev(hr, 'click');
+  ev(hr, 'keydown', { key: 'Delete' });
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['paragraph', 'image', 'table', 'paragraph']);
+  ed.destroy();
+});
+
+test('BREW: "Delete table" button removes the whole table', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const btn = host.querySelector('[data-bre-table-action="del-block"]');
+  assert.ok(btn, 'button exists');
+  assert.equal(btn.textContent, 'Delete table');
+  ev(btn, 'click');
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['paragraph', 'image', 'divider', 'paragraph']);
+  ed.destroy();
+});
+
+test('BREW: double-click media opens the dialog with a Remove button that deletes it', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const fig = host.querySelector('figure[data-bre-type="image"]');
+  ev(fig, 'dblclick');
+  const dialog = host.querySelector('.bre-brew-media-dialog');
+  assert.ok(dialog, 'dialog opened');
+  const remove = dialog.querySelector('.bre-brew-link-remove');
+  assert.ok(remove, 'Remove button present');
+  remove.click();
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['paragraph', 'divider', 'table', 'paragraph']);
+  ed.destroy();
+});
+
+test('BREW: Enter on a selected media block opens its dialog', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const fig = host.querySelector('figure[data-bre-type="image"]');
+  ev(fig, 'click');
+  ev(fig, 'keydown', { key: 'Enter' });
+  assert.ok(host.querySelector('.bre-brew-media-dialog'));
+  ed.destroy();
+});
+
+test('BREW read-only: no selection, no dialog, no table controls', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW', readOnly: true });
+  ed.setJSON(brewDoc());
+  const fig = host.querySelector('figure[data-bre-type="image"]');
+  ev(fig, 'click');
+  ev(fig, 'dblclick');
+  assert.equal(host.querySelectorAll('[data-bre-selected]').length, 0);
+  assert.equal(host.querySelector('.bre-brew-media-dialog'), null);
+  assert.ok(host.querySelector('.bre-table-controls').hidden);
+  ed.destroy();
+});
+
+test('BREW: formula click opens an edit dialog (Remove deletes it)', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x^2', displayMode: true } }]));
+  const f = host.querySelector('[data-bre-type="formula"]');
+  ev(f, 'click');
+  const dlg = host.querySelector('.bre-brew-link-dialog');
+  assert.ok(dlg, 'formula dialog opened (no window.prompt)');
+  dlg.querySelector('.bre-brew-link-remove').click();
+  await tick(5);
+  assert.equal(brewTypes(ed).includes('formula'), false);
+  ed.destroy();
+});

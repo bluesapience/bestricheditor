@@ -220,7 +220,7 @@
 }
 
 /* A selected non-text block (image, audio, video, divider…): Backspace/Delete removes it. */
-.bre-block[data-bre-selected] {
+.bre-editor [data-bre-selected] {
   outline: 2px solid Highlight;
   outline-offset: 2px;
 }

@@ -68,9 +68,12 @@ export function sanitizeToFragment(html, opts = {}) {
   return runSanitize(html, opts, true);
 }
 
-function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFragment) {
+function runSanitize(html, { allowKaTeX = false, allowMedia = false, allowButtons = false } = {}, asFragment) {
   if (typeof html !== 'string') html = '';
   const extra = asFragment ? { RETURN_DOM_FRAGMENT: true } : null;
+  // `allowButtons` is ONLY for markup the editor generates itself (BREW's table
+  // controls); user content never gets <button>.
+  const forbidTags = allowButtons ? FORBIDDEN_TAGS.filter((t) => t !== 'button') : FORBIDDEN_TAGS;
 
   // Fast path: markup needs a '<' to create any element or attribute. Entity
   // text (&lt;script&gt;) only ever decodes to text, so a string with no '<'
@@ -86,7 +89,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
   // and style attributes can smuggle url()/expression()). KaTeX output is the
   // one exception — it needs style for layout — and is scrubbed by a hook below.
   if (!allowKaTeX && !allowMedia) {
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], FORBID_TAGS: FORBIDDEN_TAGS, ...extra });
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], FORBID_TAGS: forbidTags, ...extra });
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
@@ -120,7 +123,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
     USE_PROFILES: { html: true, ...(allowKaTeX ? { svg: true, mathMl: true } : {}) },
     ADD_ATTR: addAttr,
     ADD_TAGS: addTags,
-    FORBID_TAGS: FORBIDDEN_TAGS,
+    FORBID_TAGS: forbidTags,
     ...(allowKaTeX ? {} : { FORBID_ATTR: ['style'] }),
     ...extra,
   });

@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 - **Notion-style block selection and menu**: click image/audio/video/divider to select, `Backspace`/`Delete` removes; click the drag handle (or `Alt+Shift+M`) for a Replace / Duplicate / Delete menu; double-click media to replace. A single click on loaded media no longer opens the URL prompt (empty placeholders still do).
+- **BREW block deletion**: clicking an image/audio/video/divider selects it (`Backspace`/`Delete` removes it via the browser's undo-able delete, `Esc` deselects, `Enter` or double-click edits media); media and formula dialogs have a **Remove** button; tables have a **Delete table** button; formulas edit in a dialog instead of `window.prompt`.
 - **Delete a block**: "Delete table" button, `Ctrl/Cmd+Shift+Backspace` on any block, and Backspace at the start of the block after a divider.
 - **Read-only mode** (`readOnly` option, `setReadOnly()` / `isReadOnly()`) in all three modes.
 - **Placeholder** option for all modes (shown in an empty editor).
@@ -29,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- BREW: table control buttons and KaTeX markup were stripped from editor-generated snippets (toolbar-inserted tables/formulas); they are now sanitized with the right allowances.
 - Columns content was silently dropped when a BRE document was loaded into BREW or BREM (data shape `columns` vs `children`); both shapes are now read.
 - `<style>`, `<form>`, `<input>`, `<button>` and friends are stripped from all sanitized content.
 - `getHTML()` no longer caches the plain-text formula fallback while KaTeX is still loading (BRE and BREW).

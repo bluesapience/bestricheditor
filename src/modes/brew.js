@@ -86,6 +86,10 @@ export const DEFAULT_MESSAGES = {
   delRow: '− Row',
   addCol: '+ Col',
   delCol: '− Col',
+  delTable: 'Delete table',
+  formulaDialog: 'Edit formula',
+  formulaPlaceholder: 'LaTeX, e.g. E = mc^2',
+  blockSelected: 'Block selected. Press Delete to remove it, Enter to edit.',
   tableHeader: 'Header',
   tableCell: 'Cell',
   invalidDocument: 'Invalid document',
@@ -354,7 +358,7 @@ export function createBrewEditor(container, options = {}) {
           ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1, ci)).join('')}</tr>`).join('')}</tbody>`
           : '';
         const btn = (a, label) => `<button type="button" class="bre-table-btn" data-bre-table-action="${a}">${escapeHTML(label)}</button>`;
-        const controls = `<div class="bre-table-controls"${readOnly ? ' hidden' : ''}>${btn('add-row', messages.addRow)}${btn('del-row', messages.delRow)}${btn('add-col', messages.addCol)}${btn('del-col', messages.delCol)}</div>`;
+        const controls = `<div class="bre-table-controls"${readOnly ? ' hidden' : ''}>${btn('add-row', messages.addRow)}${btn('del-row', messages.delRow)}${btn('add-col', messages.addCol)}${btn('del-col', messages.delCol)}${btn('del-block', messages.delTable)}</div>`;
         return `<div data-bre-type="table" data-bre-id="${id}" data-bre-block-id="${id}" contenteditable="false" class="bre-table-wrapper"><table class="bre-table">${th}${tb}</table>${controls}</div>`;
       }
       case 'image': {
@@ -386,7 +390,8 @@ export function createBrewEditor(container, options = {}) {
   }
 
   function snippetToNode(html) {
-    tpl.innerHTML = sanitizeHTML(html, { allowKaTeX: false, allowMedia: true });
+    // Editor-generated snippets: keep KaTeX markup and the table control buttons.
+    tpl.innerHTML = sanitizeHTML(html, { allowKaTeX: true, allowMedia: true, allowButtons: true });
     return tpl.content.firstElementChild;
   }
 
@@ -946,7 +951,7 @@ export function createBrewEditor(container, options = {}) {
     });
   }
 
-  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave) {
+  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave, onRemove) {
     const fields = [{
       key: 'src', placeholder: type === 'image' ? messages.imageUrl : type === 'audio' ? messages.audioUrl : messages.videoUrl, value: src,
     }];
@@ -959,6 +964,7 @@ export function createBrewEditor(container, options = {}) {
       fields,
       validate: (v) => (v.src && (sanitizeURL(v.src) || brewGetEmbedUrl(v.src, opts.embedAllowlist)) ? [] : ['src']),
       onSave: (v) => onSave({ src: v.src, alt: v.alt || '', caption: v.caption || '' }),
+      onRemove,
     });
   }
 
@@ -1064,6 +1070,7 @@ export function createBrewEditor(container, options = {}) {
   }
 
   function handleTableAction(action, wrapper) {
+    if (action === 'del-block') { removeBlockEl(wrapper); return; }
     const table = wrapper.querySelector('table');
     if (!table) return;
     if (action === 'add-row') {
@@ -1096,7 +1103,7 @@ export function createBrewEditor(container, options = {}) {
   function insertMediaBlock(block) {
     const id = generateId();
     const snippet = snippetFor({ ...block, id }, id);
-    const safe = sanitizeHTML(snippet, { allowKaTeX: false, allowMedia: true });
+    const safe = sanitizeHTML(snippet, { allowKaTeX: true, allowMedia: true, allowButtons: true });
     surface.focus();
     document.execCommand('insertHTML', false, safe + '<p><br></p>');
     scheduleChange();
@@ -1120,7 +1127,7 @@ export function createBrewEditor(container, options = {}) {
       ));
       if (node && figureEl.parentNode) figureEl.parentNode.replaceChild(node, figureEl);
       scheduleChange();
-    });
+    }, () => removeBlockEl(figureEl));
   }
 
   for (const [btn, type] of [[btnImage, 'image'], [btnAudio, 'audio'], [btnVideo, 'video']]) {
@@ -1170,28 +1177,107 @@ export function createBrewEditor(container, options = {}) {
       return;
     }
 
-    const mediaFigure = e.target.closest('figure[data-bre-type]');
-    if (mediaFigure && surface.contains(mediaFigure) &&
-        ['image', 'audio', 'video'].includes(mediaFigure.getAttribute('data-bre-type'))) {
+    // Media / divider: a click selects the block (outline); Delete removes it,
+    // Enter or double-click edits. Never opens a dialog by accident.
+    const selectable = e.target.closest('figure[data-bre-type], hr');
+    if (selectable && surface.contains(selectable)) {
       e.preventDefault();
-      showMediaDialog(mediaFigure);
+      selectBlockEl(selectable);
       return;
     }
 
     const formulaEl = e.target.closest('[data-bre-type="formula"]');
     if (!formulaEl) return;
-    const latex = window.prompt(messages.formulaEditPrompt, formulaEl.getAttribute('data-bre-latex') || '');
-    if (latex === null) return;
-    if (!latex.trim()) { formulaEl.remove(); scheduleChange(); return; }
-    loadKaTeX().then(() => {
-      if (destroyed) return;
-      const rendered = renderKatex(latex, formulaEl.getAttribute('data-bre-display') !== 'false');
-      formulaEl.setAttribute('data-bre-latex', latex);
-      if (rendered != null) formulaEl.innerHTML = rendered; // sanitized by renderKatex
-      else formulaEl.textContent = `$${latex}$`;
-      scheduleChange();
-    });
+    openFormulaDialog(formulaEl);
   });
+
+  // Double-click a media block to edit its source / alt / caption.
+  listen(surface, 'dblclick', (e) => {
+    if (readOnly) return;
+    const fig = e.target.closest('figure[data-bre-type]');
+    if (fig && surface.contains(fig) && ['image', 'audio', 'video'].includes(fig.getAttribute('data-bre-type'))) {
+      e.preventDefault();
+      showMediaDialog(fig);
+    }
+  });
+
+  // ── Block selection + deletion (media, divider, table, formula) ────────────
+  let selectedBlockEl = null;
+
+  function selectBlockEl(el) {
+    if (selectedBlockEl && selectedBlockEl !== el) clearBlockSelection();
+    selectedBlockEl = el;
+    el.setAttribute('data-bre-selected', '');
+    el.setAttribute('tabindex', '-1');
+    el.focus({ preventScroll: true });
+  }
+
+  function clearBlockSelection() {
+    if (!selectedBlockEl) return;
+    selectedBlockEl.removeAttribute('data-bre-selected');
+    selectedBlockEl.removeAttribute('tabindex');
+    selectedBlockEl = null;
+  }
+
+  /**
+   * Delete a block through the browser's own editing command so it lands on the
+   * native undo stack (Cmd+Z restores it); fall back to a plain removal.
+   */
+  function removeBlockEl(el) {
+    if (!el || !el.parentNode) return;
+    clearBlockSelection();
+    const sel = window.getSelection();
+    surface.focus();
+    if (sel) {
+      const r = document.createRange();
+      r.selectNode(el);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      try { document.execCommand('delete'); } catch (_) { /* fall through */ }
+    }
+    if (el.isConnected) el.remove();
+    if (!surface.firstChild) surface.replaceChildren(); // keep :empty for the placeholder
+    scheduleChange();
+  }
+
+  listen(surface, 'keydown', (e) => {
+    if (readOnly || !selectedBlockEl || e.target !== selectedBlockEl) return;
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault();
+      removeBlockEl(selectedBlockEl);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      clearBlockSelection();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (['image', 'audio', 'video'].includes(selectedBlockEl.getAttribute('data-bre-type'))) showMediaDialog(selectedBlockEl);
+    }
+  });
+
+  listen(surface, 'focusin', (e) => {
+    if (selectedBlockEl && e.target !== selectedBlockEl) clearBlockSelection();
+  });
+
+  function openFormulaDialog(formulaEl) {
+    openDialog({
+      className: 'bre-brew-link-dialog',
+      label: messages.formulaDialog,
+      savedRange: null,
+      fields: [{ key: 'latex', placeholder: messages.formulaPlaceholder, value: formulaEl.getAttribute('data-bre-latex') || '' }],
+      validate: (v) => (v.latex ? [] : ['latex']),
+      onSave: ({ latex }) => {
+        loadKaTeX().then(() => {
+          if (destroyed) return;
+          const rendered = renderKatex(latex, formulaEl.getAttribute('data-bre-display') !== 'false');
+          formulaEl.setAttribute('data-bre-latex', latex);
+          if (rendered != null) formulaEl.innerHTML = rendered; // sanitized by renderKatex
+          else formulaEl.textContent = `$${latex}$`;
+          scheduleChange();
+        });
+      },
+      onRemove: () => removeBlockEl(formulaEl),
+    });
+  }
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
@@ -1368,7 +1454,7 @@ export function createBrewEditor(container, options = {}) {
     });
     const textOut = sanitizeBatch(textIdx.map(i => plans[i].html));
     textIdx.forEach((i, k) => { plans[i].html = textOut[k]; });
-    const snipOut = sanitizeBatch(snipIdx.map(i => plans[i].snippet), { allowKaTeX: true, allowMedia: true });
+    const snipOut = sanitizeBatch(snipIdx.map(i => plans[i].snippet), { allowKaTeX: true, allowMedia: true, allowButtons: true });
     snipIdx.forEach((i, k) => { plans[i].snippet = snipOut[k]; });
 
     const frag = document.createDocumentFragment();
