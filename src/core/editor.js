@@ -495,6 +495,12 @@ export function createEditor(container, options = {}) {
     }, () => focusOrSelect(blockId));
   }
 
+  /** Keyboard-opened menu: just under the top-left of the block. */
+  function blockAnchor(el) {
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.top + 28, left: r.left, right: r.left };
+  }
+
   function cloneWithNewIds(block) {
     const copy = JSON.parse(JSON.stringify(block));
     const reid = (b) => {
@@ -748,7 +754,7 @@ export function createEditor(container, options = {}) {
         e.preventDefault();
         const field = selectedEl.querySelector('[data-bre-field]');
         if (field) field.focus();
-        else openBlockMenu(id, selectedEl.getBoundingClientRect());
+        else openBlockMenu(id, blockAnchor(selectedEl));
         return;
       }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -766,7 +772,7 @@ export function createEditor(container, options = {}) {
       const be = closestBlock(e.target);
       if (be) {
         e.preventDefault();
-        openBlockMenu(be.getAttribute('data-bre-block-id'), be.getBoundingClientRect());
+        openBlockMenu(be.getAttribute('data-bre-block-id'), blockAnchor(be));
         return;
       }
     }

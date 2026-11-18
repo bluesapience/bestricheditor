@@ -546,3 +546,24 @@ test('read-only: no selection, no block menu', () => {
   assert.ok(!menu || menu.hidden);
   ed.destroy();
 });
+
+test('block menu anchors beside the handle even when capture fires hover on the root', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(media());
+  fire(host.querySelector('[data-bre-block-id="img"]'), 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  // Pretend the handle sits at a known place.
+  handle.getBoundingClientRect = () => ({ top: 120, bottom: 140, left: 10, right: 30, width: 20, height: 20 });
+  fire(handle, 'pointerdown', { clientX: 5, clientY: 5, pointerId: 1 });
+  // Pointer capture makes the browser aim a hover event at the root: must not hide the handle.
+  fire(host.querySelector('.bre-editor'), 'pointerover');
+  assert.equal(handle.hidden, false, 'handle stays visible during the press');
+  fire(handle, 'pointerup', { clientX: 5, clientY: 5, pointerId: 1 });
+  const menu = document.querySelector('.bre-block-menu');
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.style.left, '34px', 'right of the handle (30 + 4)');
+  assert.equal(menu.style.top, '120px', 'level with the handle');
+  fire(menu, 'keydown', { key: 'Escape' });
+  ed.destroy();
+});

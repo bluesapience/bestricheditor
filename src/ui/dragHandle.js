@@ -51,7 +51,9 @@ export function initDragHandles(root, content, state, renderer, hooks) {
   }
 
   function place(el) {
-    if (el === hoveredEl || dragging) return;
+    // While a press is pending/dragging the browser captures the pointer on the
+    // root and fires hover events aimed at it; those must not hide the handle.
+    if (el === hoveredEl || dragging || pending) return;
     hoveredEl = el;
     if (!el || isReadOnly()) {
       handle.hidden = true;
@@ -118,7 +120,12 @@ export function initDragHandles(root, content, state, renderer, hooks) {
     if (!h || !hoveredEl || isReadOnly()) return;
     e.preventDefault();
     // A press only becomes a drag after moving; a plain click opens the block menu.
-    pending = { id: hoveredEl.getAttribute('data-bre-block-id'), x: e.clientX, y: e.clientY };
+    pending = {
+      id: hoveredEl.getAttribute('data-bre-block-id'),
+      x: e.clientX,
+      y: e.clientY,
+      rect: handle.getBoundingClientRect(), // measured while the handle is certainly visible
+    };
     try { root.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
   }
 
@@ -171,10 +178,12 @@ export function initDragHandles(root, content, state, renderer, hooks) {
 
   function onPointerUp(e) {
     if (pending && !dragging) {
-      const id = pending.id;
+      const { id, rect } = pending;
       pending = null;
       try { root.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
-      if (onHandleClick) onHandleClick({ blockId: id, anchorRect: handle.getBoundingClientRect() });
+      // Notion-style: the menu opens just to the right of the handle, level with it.
+      const anchorRect = { top: rect.top, bottom: rect.top, left: rect.right + 4, right: rect.right + 4 };
+      if (onHandleClick) onHandleClick({ blockId: id, anchorRect });
       return;
     }
     endDrag(e, true);
