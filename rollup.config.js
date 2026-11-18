@@ -54,7 +54,8 @@ const prodConfigs = [
   {
     input: 'src/bre.js',
     output: [
-      { file: 'dist/bre.umd.js', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true, sourcemap: true },
+      // 'hidden': write the .map but no `//# sourceMappingURL` comment (the maps are not published)
+      { file: 'dist/bre.umd.js', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true, sourcemap: 'hidden' },
       // package.json has "type":"module", so Node would parse a .js UMD as ESM.
       // Same bundle with a .cjs extension is what require() must load.
       { file: 'dist/bre.umd.cjs', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true },
@@ -78,7 +79,7 @@ const prodConfigs = [
   // KaTeX for the UMD/CDN build
   {
     input: 'scripts/katex-entry.js',
-    output: { file: 'dist/bre.katex.umd.js', format: 'iife', sourcemap: true },
+    output: { file: 'dist/bre.katex.umd.js', format: 'iife', sourcemap: 'hidden' },
     plugins: [nodeResolve(), minify()],
   },
 ];

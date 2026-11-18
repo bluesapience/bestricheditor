@@ -28,10 +28,12 @@ export function createBlockMenu({ messages }) {
 
   function render() {
     menu.textContent = '';
+    menu.setAttribute('aria-activedescendant', menu.id + '-item-' + active);
     items.forEach((it, i) => {
       const el = document.createElement('div');
       el.className = 'bre-slash-item';
       el.setAttribute('role', 'menuitem');
+      el.id = menu.id + '-item-' + i;
       el.setAttribute('data-bre-menu-index', String(i));
       el.setAttribute('data-active', i === active ? 'true' : 'false');
       el.textContent = it.label;
@@ -43,6 +45,7 @@ export function createBlockMenu({ messages }) {
     active = (i + items.length) % items.length;
     const els = menu.children;
     for (let k = 0; k < els.length; k++) els[k].setAttribute('data-active', k === active ? 'true' : 'false');
+    menu.setAttribute('aria-activedescendant', menu.id + '-item-' + active);
   }
 
   function pick(i) {

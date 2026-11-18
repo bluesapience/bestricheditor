@@ -953,3 +953,30 @@ test('table arrows leave the table only from the cell\'s edge (wrapped cells mov
   assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['table', 'paragraph']);
   ed.destroy();
 });
+
+// ── Accessibility fixes from review ──────────────────────────────────────────
+test('a11y: Alt+Shift+M works on macOS where Option changes e.key (uses the physical key)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x')]));
+  assert.equal(host.querySelector('.bre-editor').getAttribute('aria-keyshortcuts'), 'Alt+Shift+M');
+  fire(host.querySelector('[data-bre-field]'), 'keydown', { key: 'Â', code: 'KeyM', altKey: true, shiftKey: true });
+  const menu = document.querySelector('.bre-block-menu');
+  assert.equal(menu.hidden, false);
+  fire(menu, 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('a11y: block menu exposes the active item via aria-activedescendant', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(media());
+  const menu = openHandleMenu(host, 'img');
+  const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+  assert.ok(items.every((i) => i.id), 'every item has an id');
+  assert.equal(menu.getAttribute('aria-activedescendant'), items[0].id);
+  fire(menu, 'keydown', { key: 'ArrowDown' });
+  assert.equal(menu.getAttribute('aria-activedescendant'), items[1].id, 'follows the highlighted item');
+  fire(menu, 'keydown', { key: 'Escape' });
+  ed.destroy();
+});

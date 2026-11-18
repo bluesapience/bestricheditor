@@ -149,6 +149,7 @@ export function createEditor(container, options = {}) {
   if (opts.dir === 'ltr' || opts.dir === 'rtl') root.setAttribute('dir', opts.dir);
   else if (opts.dir === 'auto') root.setAttribute('data-bre-dir', 'auto');
   if (readOnly) root.setAttribute('data-bre-readonly', '');
+  root.setAttribute('aria-keyshortcuts', 'Alt+Shift+M');
 
   const content = document.createElement('div');
   content.className = 'bre-blocks';
@@ -880,7 +881,7 @@ export function createEditor(container, options = {}) {
     }
 
     // Alt+Shift+M: open the block actions menu for the current block.
-    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'm') {
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && (e.code === 'KeyM' || e.key.toLowerCase() === 'm')) {
       const be = closestBlock(e.target);
       if (be) {
         e.preventDefault();

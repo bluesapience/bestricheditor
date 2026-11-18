@@ -93,6 +93,7 @@ export const DEFAULT_MESSAGES = {
   formulaDialog: 'Edit formula',
   formulaPlaceholder: 'LaTeX, e.g. E = mc^2',
   blockSelected: 'Block selected. Press Delete to remove it, Enter to edit.',
+  blockDeleted: 'Block deleted',
   tableHeader: 'Header',
   tableCell: 'Cell',
   invalidDocument: 'Invalid document',
@@ -380,8 +381,9 @@ export function createBrewEditor(container, options = {}) {
   /** Complex (non-text) block -> HTML snippet string. */
   // Edit / Remove buttons under each media block. Needed because embeds (iframes)
   // swallow clicks and a native <video> double-click toggles fullscreen.
-  function mediaControls() {
-    const b = (a, label) => `<button type="button" class="bre-table-btn" data-bre-media-action="${a}">${escapeHTML(label)}</button>`;
+  function mediaControls(type) {
+    // aria-label adds context: several blocks can each have an "Edit" and a "Remove".
+    const b = (a, label) => `<button type="button" class="bre-table-btn" data-bre-media-action="${a}" aria-label="${escapeHTML(label + ' ' + type)}">${escapeHTML(label)}</button>`;
     return `<div class="bre-media-controls" contenteditable="false"${readOnly ? ' hidden' : ''}>${b('edit', messages.mediaEdit)}${b('remove', messages.remove)}</div>`;
   }
 
@@ -418,14 +420,14 @@ export function createBrewEditor(container, options = {}) {
         const inner = src
           ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(d.alt || '')}" loading="lazy">`
           : `<div class="bre-image-placeholder">${escapeHTML(messages.imagePlaceholder)}</div>`;
-        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls()}</figure>`;
+        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls('image')}</figure>`;
       }
       case 'audio': {
         const src = d.src || '';
         const inner = src
           ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
           : `<div class="bre-audio-placeholder">${escapeHTML(messages.audioPlaceholder)}</div>`;
-        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls()}</figure>`;
+        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls('audio')}</figure>`;
       }
       case 'video': {
         const src = d.src || '';
@@ -434,7 +436,7 @@ export function createBrewEditor(container, options = {}) {
         if (!src) inner = `<div class="bre-video-placeholder">${escapeHTML(messages.videoPlaceholder)}</div>`;
         else if (embedUrl) inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
         else inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
-        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls()}</figure>`;
+        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls('video')}</figure>`;
       }
       default:
         return '';
@@ -1237,18 +1239,38 @@ export function createBrewEditor(container, options = {}) {
   // ── Block selection + deletion (media, divider, table, formula) ────────────
   let selectedBlockEl = null;
 
+  // Screen-reader announcements (created on first use).
+  let liveRegion = null;
+  function announce(msg) {
+    if (!liveRegion) {
+      liveRegion = document.createElement('div');
+      liveRegion.className = 'bre-sr-only';
+      liveRegion.setAttribute('role', 'status');
+      liveRegion.setAttribute('aria-live', 'polite');
+      root.appendChild(liveRegion);
+    }
+    liveRegion.textContent = '';
+    requestAnimationFrame(() => { if (!destroyed && liveRegion) liveRegion.textContent = msg; });
+  }
+
   function selectBlockEl(el) {
     if (selectedBlockEl && selectedBlockEl !== el) clearBlockSelection();
     selectedBlockEl = el;
     el.setAttribute('data-bre-selected', '');
     el.setAttribute('tabindex', '-1');
+    // A focusable element with no role/name would be announced as nothing useful.
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', messages.blockSelected);
     el.focus({ preventScroll: true });
+    announce(messages.blockSelected);
   }
 
   function clearBlockSelection() {
     if (!selectedBlockEl) return;
     selectedBlockEl.removeAttribute('data-bre-selected');
     selectedBlockEl.removeAttribute('tabindex');
+    selectedBlockEl.removeAttribute('role');
+    selectedBlockEl.removeAttribute('aria-label');
     selectedBlockEl = null;
   }
 
@@ -1270,6 +1292,7 @@ export function createBrewEditor(container, options = {}) {
     }
     if (el.isConnected) el.remove();
     if (!surface.firstChild) surface.replaceChildren(); // keep :empty for the placeholder
+    announce(messages.blockDeleted);
     scheduleChange();
   }
 
@@ -1289,6 +1312,20 @@ export function createBrewEditor(container, options = {}) {
           if (!sib) { if (e.key === 'ArrowDown') appendParagraphAtEnd(); }
           else if (isTextBlock(sib)) placeCaret(sib, e.key === 'ArrowUp');
           else selectBlockEl(sib);
+          return;
+        }
+      }
+    }
+    // ↓ / ↑ at the edge of a text block selects an adjacent image/audio/video/divider, so
+    // keyboard users can reach its Edit/Remove controls (otherwise the caret just skips it).
+    if (!readOnly && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !tcell) {
+      const blk = topLevelBlockOf(e.target);
+      if (blk && blk !== surface && blk.parentNode === surface && isTextBlock(blk)) {
+        const down = e.key === 'ArrowDown';
+        const sib = down ? blk.nextElementSibling : blk.previousElementSibling;
+        if (sib && (sib.matches('figure[data-bre-type]') || sib.nodeName === 'HR') && caretAtEdge(blk, down ? 'end' : 'start')) {
+          e.preventDefault();
+          selectBlockEl(sib);
           return;
         }
       }

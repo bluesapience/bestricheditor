@@ -495,3 +495,67 @@ test('BREW end of doc: ↓ from a table\'s last row exits to a new line; ↑ fro
   assert.ok(host.querySelector('figure').hasAttribute('data-bre-selected'), '↑ from the first row selects the image above');
   ed.destroy();
 });
+
+// ── BREW accessibility ───────────────────────────────────────────────────────
+test('BREW a11y: selecting/deleting is announced; the selected block has a role and name', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const fig = host.querySelector('figure[data-bre-type="image"]');
+  ev(fig, 'click');
+  assert.equal(fig.getAttribute('role'), 'group');
+  assert.ok(fig.getAttribute('aria-label'));
+  await tick(30);
+  const live = host.querySelector('[role="status"][aria-live="polite"]');
+  assert.ok(live && /selected/i.test(live.textContent), 'announced: ' + (live && live.textContent));
+  ev(fig, 'keydown', { key: 'Delete' });
+  await tick(30);
+  assert.match(live.textContent, /deleted/i);
+  ed.destroy();
+});
+
+test('BREW a11y: media buttons say which block they act on', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  const labels = Array.from(host.querySelectorAll('[data-bre-media-action]')).map((b) => b.getAttribute('aria-label'));
+  assert.ok(labels.includes('Edit image') && labels.includes('Remove image'), labels.join(','));
+  ed.destroy();
+});
+
+test('BREW a11y: ↓ at the end of a paragraph / ↑ at the start selects the adjacent image or divider (keyboard route to Edit/Remove)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([
+    { id: 'p1', type: 'paragraph', data: { html: 'above' } },
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 'p2', type: 'paragraph', data: { html: 'below' } },
+    { id: 'hr', type: 'divider', data: {} },
+  ]));
+  const surface = host.querySelector('.bre-brew-surface');
+  const [p1, , p2] = surface.children;
+  const fig = surface.querySelector('figure');
+  const sel = window.getSelection();
+  const at = (node, off) => { sel.removeAllRanges(); const r = document.createRange(); r.setStart(node, off); r.collapse(true); sel.addRange(r); };
+  at(p1.firstChild, 1); // mid-text: native caret movement
+  assert.ok(!ev(p1, 'keydown', { key: 'ArrowDown' }).defaultPrevented);
+  at(p1.firstChild, p1.firstChild.length); // end of the paragraph
+  assert.ok(ev(p1, 'keydown', { key: 'ArrowDown' }).defaultPrevented);
+  assert.ok(fig.hasAttribute('data-bre-selected'), '↓ selects the image below');
+  at(p2.firstChild, 0);
+  ev(p2, 'keydown', { key: 'ArrowUp' });
+  assert.ok(fig.hasAttribute('data-bre-selected'), '↑ at the start selects the image above');
+  at(p2.firstChild, p2.firstChild.length);
+  ev(p2, 'keydown', { key: 'ArrowDown' });
+  assert.ok(surface.querySelector('hr').hasAttribute('data-bre-selected'), '↓ selects the divider below');
+  ed.destroy();
+});
+
+test('BREW: table/media control buttons keep focus on mousedown (controls would hide before the click in Safari/Firefox)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(brewDoc());
+  assert.ok(ev(host.querySelector('[data-bre-table-action="add-row"]'), 'mousedown').defaultPrevented);
+  assert.ok(ev(host.querySelector('[data-bre-media-action="edit"]'), 'mousedown').defaultPrevented);
+  ed.destroy();
+});
