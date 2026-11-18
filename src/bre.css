@@ -70,6 +70,16 @@
   content: none;
 }
 
+/* Table controls (add/remove row/column, delete table) show only while the
+   caret is inside the table, in BRE (.bre-table-wrapper) and BREW (data-bre-type). */
+.bre-table-controls {
+  display: none;
+}
+.bre-table-wrapper:focus-within .bre-table-controls:not([hidden]),
+[data-bre-type="table"]:focus-within .bre-table-controls:not([hidden]) {
+  display: flex;
+}
+
 /* No placeholders or edit affordances in read-only mode. */
 .bre-editor[data-bre-readonly] [data-bre-placeholder]:empty::before {
   content: none;

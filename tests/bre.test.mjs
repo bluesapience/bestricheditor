@@ -1,6 +1,7 @@
 import { mount, tick } from './env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createEditor } from '../src/core/editor.js';
 import { blockRegistry } from '../src/core/blockRegistry.js';
 const registerBlock = (d) => blockRegistry.registerCustom(d);
@@ -567,3 +568,30 @@ test('block menu anchors beside the handle even when capture fires hover on the 
   fire(menu, 'keydown', { key: 'Escape' });
   ed.destroy();
 });
+
+test('table controls: shown only while editing (CSS contract) and focus is restored after a re-render', () => {
+  // CSS: hidden by default, visible via :focus-within in BRE and BREW
+  const css = readFileSync(new URL('../src/bre.css', import.meta.url), 'utf8');
+  assert.match(css, /\.bre-table-controls\s*\{\s*display:\s*none/);
+  assert.match(css, /\.bre-table-wrapper:focus-within \.bre-table-controls:not\(\[hidden\]\)/);
+  assert.match(css, /\[data-bre-type="table"\]:focus-within \.bre-table-controls:not\(\[hidden\]\)/);
+
+  // Behaviour: add-row re-renders the table; the caret must land back in a cell
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } }]));
+  const focused = [];
+  const orig = window.HTMLElement.prototype.focus;
+  window.HTMLElement.prototype.focus = function () { focused.push(this.getAttribute('data-bre-table-row') + ',' + this.getAttribute('data-bre-table-col')); };
+  fire(host.querySelector('[data-bre-table-row="1"][data-bre-table-col="1"]'), 'focusin');
+  fire(host.querySelector('[data-bre-table-action="add-row"]'), 'click');
+  assert.equal(ed.getJSON().blocks[0].data.rows.length, 3);
+  assert.equal(focused.at(-1), '2,1', 'caret goes to the new row, same column');
+  fire(host.querySelector('[data-bre-table-action="add-col"]'), 'click');
+  assert.equal(focused.at(-1), '2,2', 'caret goes to the new column');
+  fire(host.querySelector('[data-bre-table-action="del-col"]'), 'click');
+  assert.equal(focused.at(-1), '2,1', 'clamped into the smaller table');
+  window.HTMLElement.prototype.focus = orig;
+  ed.destroy();
+});
+

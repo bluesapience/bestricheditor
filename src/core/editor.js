@@ -325,7 +325,46 @@ export function createEditor(container, options = {}) {
 
   // ── Focus / selection events ───────────────────────────────────────────────
   let hasFocus = false;
+  // Last table cell the caret was in — used to put focus back after a re-render
+  // (add/remove row or column), so the controls (shown only while editing) stay visible.
+  let tableCursor = null;
+
+  function restoreTableFocus(blockId, action) {
+    const b = state.getBlock(blockId);
+    if (!b || !b.data.rows || !b.data.rows.length) return;
+    const rows = b.data.rows;
+    let { row, col } = tableCursor && tableCursor.blockId === blockId ? tableCursor : { row: 0, col: 0 };
+    if (action === 'add-row') row = rows.length - 1;
+    if (action === 'add-col') col = rows[0].length - 1;
+    row = Math.min(row, rows.length - 1);
+    col = Math.min(col, rows[0].length - 1);
+    const el = renderer.getBlockEl(blockId);
+    const cell = el && el.querySelector(`[data-bre-table-row="${row}"][data-bre-table-col="${col}"]`);
+    if (!cell) return;
+    cell.focus();
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.selectNodeContents(cell);
+      r.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    tableCursor = { blockId, row, col };
+  }
+
   function handleFocusIn(e) {
+    const cell = e.target.closest ? e.target.closest('[data-bre-table-row]') : null;
+    if (cell) {
+      const be = closestBlock(cell);
+      if (be) {
+        tableCursor = {
+          blockId: be.getAttribute('data-bre-block-id'),
+          row: parseInt(cell.getAttribute('data-bre-table-row'), 10),
+          col: parseInt(cell.getAttribute('data-bre-table-col'), 10),
+        };
+      }
+    }
     if (selectedEl && e.target !== selectedEl) clearSelection();
     if (hasFocus) return;
     hasFocus = true;
@@ -571,6 +610,7 @@ export function createEditor(container, options = {}) {
     }
     state.updateBlockData(blockId, { rows });
     renderer.updateBlock(state.getBlock(blockId));
+    restoreTableFocus(blockId, action);
     notifyChange();
   }
 

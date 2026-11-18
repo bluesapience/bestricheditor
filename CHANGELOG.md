@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- Table controls (add/remove row/column, delete table) are shown only while the caret is inside the table, in BRE and BREW. In BRE, focus is restored to a cell after each action so the controls stay up.
 - BREW: the media and formula edit dialogs now span the width of the block they edit (min 280 px, never wider than the editor).
 - BREW: you can add a line at the end of the document when the last block is an image, audio, video, table, divider or code block — click the empty space below it, or press `↓` on the selected block (also selects/moves between neighbouring blocks).
 - BREW: media **Edit / Remove** buttons now float over the block's top-left corner when it is selected or hovered (instead of sitting permanently underneath).

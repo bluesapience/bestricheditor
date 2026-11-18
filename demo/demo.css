@@ -47,8 +47,7 @@ body {
 
 .demo-card {
   background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  border-radius: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
   min-height: 500px;
   overflow: hidden;
 }
@@ -64,16 +63,16 @@ body {
 
 #bre-demo .bre-heading { line-height: 1.3; }
 #bre-demo .bre-quote { margin: 0; padding: 4px 16px; border-left: 3px solid #3b82f6; color: #4b5563; }
-#bre-demo .bre-code-wrapper { background: #1e1e2e; color: #cdd6f4; border-radius: 6px; padding: 8px 12px; }
+#bre-demo .bre-code-wrapper { background: #1e1e2e; color: #cdd6f4; border-radius: 0; padding: 8px 12px; }
 #bre-demo .bre-code { margin: 0; overflow-x: auto; }
-#bre-demo .bre-column { padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 6px; margin: 0 4px; }
+#bre-demo .bre-column { padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 0; margin: 0 4px; }
 #bre-demo .bre-table th, #bre-demo .bre-table td { border-color: #e5e7eb; padding: 6px 10px; }
 #bre-demo .bre-slash-menu, #bre-demo .bre-inline-toolbar { border-color: #e5e7eb; }
-.bre-slash-menu { border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 240px; }
+.bre-slash-menu { border-radius: 0; box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 240px; }
 .bre-slash-item { padding: 6px 10px; }
 .bre-slash-item__icon { font-family: monospace; min-width: 2.5em; text-align: center; }
 .bre-slash-item__desc { opacity: .6; font-size: .85em; }
-.bre-inline-toolbar { border-radius: 6px; padding: 2px; }
+.bre-inline-toolbar { border-radius: 0; padding: 2px; }
 .bre-inline-toolbar-btn { border: 0; background: none; width: 28px; height: 28px; }
 .bre-drag-handle { opacity: .4; padding-right: 6px; }
 .bre-brew-toolbar { gap: 4px; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
@@ -92,8 +91,7 @@ body {
   background: #111827;
   color: #fff;
   border: 1px solid #111827;
-  border-radius: 6px;
-  padding: 4px 12px;
+  border-radius: 0; padding: 4px 12px;
   line-height: 1.5;
 }
 .bre-table-btn:hover,
@@ -104,10 +102,13 @@ body {
 }
 .bre-table-controls,
 .bre-media-controls { gap: 6px; padding: 6px; }
-.bre-table-controls { display: flex; flex-wrap: wrap; }
+.bre-table-controls { flex-wrap: wrap; } /* display is controlled by the library: shown only while editing */
 
 /* BREW dialogs (the library sets position and width; this is just the look) */
-.bre-brew-link-dialog { padding: 12px; gap: 8px; border-color: #e5e7eb; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
-.bre-brew-link-input { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; }
+.bre-brew-link-dialog { padding: 12px; gap: 8px; border-color: #e5e7eb; border-radius: 0; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+.bre-brew-link-input { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 0; }
 .bre-brew-link-actions { gap: 6px; }
 .bre-brew-link-remove { margin-right: auto; }
+
+/* Sharp edges everywhere in the demo: buttons, selection outline, popups. */
+.bre-editor [data-bre-selected] { border-radius: 0; }
