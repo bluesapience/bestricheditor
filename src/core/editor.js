@@ -1705,7 +1705,13 @@ export function createEditor(container, options = {}) {
     return state.getDoc();
   }
 
-  /** Programmatic loads never fire 'change'. */
+  /**
+   * Programmatic loads never fire 'change'.
+   *
+   * TODO(setJSON-validation): this is permissive — bad input (unknown block types, unsafe ids/src,
+   * wrong data shapes) is silently repaired and the caller is not told. Decide whether to reject it
+   * or report what changed (strict mode / validateDocument / 'error' event). Notes in TODO.md.
+   */
   function setJSON(doc) {
     if (!doc || !Array.isArray(doc.blocks)) {
       console.warn('[bre] setJSON: invalid document');
