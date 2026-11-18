@@ -263,7 +263,10 @@ editor.setJSON(doc);
 | Feature | Detail |
 |---|---|
 | Slash menu | Press `/` to open a searchable block inserter |
-| Drag reorder | Drag the handle on the left of any block |
+| Drag reorder | Drag the handle (`⋮⋮`) on the left of any block. Keyboard: `Alt+Shift+↑` / `↓` |
+| Block menu | **Click** the handle (without dragging) or press `Alt+Shift+M`: Replace (media), Duplicate, Delete |
+| Select media / divider | Click a loaded image, audio, video or divider to select it (outline, `data-bre-selected`); `Backspace` / `Delete` removes it, `Esc` deselects, `↑` / `↓` moves to the neighbouring block. Double-click media to replace its source |
+| Delete a block | Select it and press `Delete`, use the block menu, or `⌘⇧⌫` / `Ctrl+Shift+Backspace` from anywhere inside it. Tables also have a **Delete table** button. All undoable |
 | Inline toolbar | Select text → floating toolbar appears with Bold, Italic, Underline, Code, Link buttons |
 | Keyboard splitting | `Enter` splits a block; `Backspace` at start merges |
 | Arrow navigation | `↑` / `↓` moves between blocks |

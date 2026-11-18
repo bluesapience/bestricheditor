@@ -400,3 +400,149 @@ test('review fixes: nested bad blocks, columns→other modes, formula cache, lis
   console.warn = w;
   l.destroy(); ed.destroy(); brew.destroy(); brem.destroy(); f.destroy();
 });
+
+// ── Notion-style block selection + block menu ────────────────────────────────
+const media = () => doc([
+  para('a', 'before'),
+  { id: 'img', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+  { id: 'hr', type: 'divider', data: {} },
+  { id: 'aud', type: 'audio', data: { src: 'https://example.com/a.mp3', caption: '' } },
+  para('z', 'after'),
+]);
+const ids = (ed) => ed.getJSON().blocks.map((b) => b.id);
+
+test('select media: click selects (no prompt), Backspace deletes, undo restores', () => {
+  const host = mount();
+  let prompts = 0;
+  const ed = createEditor(host, { mode: 'BRE', prompt: () => { prompts++; return null; } });
+  ed.setJSON(media());
+  fire(host.querySelector('.bre-image'), 'click');
+  const wrapper = host.querySelector('[data-bre-block-id="img"]');
+  assert.ok(wrapper.hasAttribute('data-bre-selected'), 'selected');
+  assert.equal(prompts, 0, 'a click on loaded media never prompts');
+  fire(wrapper, 'keydown', { key: 'Backspace' });
+  assert.deepEqual(ids(ed), ['a', 'hr', 'aud', 'z']);
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  assert.deepEqual(ids(ed), ['a', 'img', 'hr', 'aud', 'z']);
+  ed.destroy();
+});
+
+test('select divider and audio; Delete key works; Escape and field focus clear selection', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(media());
+  fire(host.querySelector('.bre-divider'), 'click');
+  const hr = host.querySelector('[data-bre-block-id="hr"]');
+  assert.ok(hr.hasAttribute('data-bre-selected'));
+  fire(hr, 'keydown', { key: 'Escape' });
+  assert.ok(!hr.hasAttribute('data-bre-selected'), 'Escape clears');
+  fire(host.querySelector('.bre-audio'), 'click');
+  const aud = host.querySelector('[data-bre-block-id="aud"]');
+  assert.ok(aud.hasAttribute('data-bre-selected'));
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'focusin');
+  assert.ok(!aud.hasAttribute('data-bre-selected'), 'focusing a field clears');
+  fire(host.querySelector('.bre-audio'), 'click');
+  fire(host.querySelector('[data-bre-block-id="aud"]'), 'keydown', { key: 'Delete' });
+  assert.deepEqual(ids(ed), ['a', 'img', 'hr', 'z']);
+  ed.destroy();
+});
+
+test('empty media placeholder click still asks for a source; double-click replaces', async () => {
+  const host = mount();
+  const asked = [];
+  const ed = createEditor(host, { mode: 'BRE', prompt: (msg) => { asked.push(msg); return 'https://example.com/new.png'; } });
+  ed.setJSON(doc([{ id: 'i', type: 'image', data: { src: '', alt: '', caption: '' } }]));
+  fire(host.querySelector('.bre-image-placeholder'), 'click');
+  await tick(10);
+  assert.equal(asked.length, 1);
+  assert.equal(ed.getJSON().blocks[0].data.src, 'https://example.com/new.png');
+  fire(host.querySelector('.bre-image'), 'dblclick');
+  await tick(10);
+  assert.equal(asked.length, 2, 'double-click opens replace');
+  ed.destroy();
+});
+
+function openHandleMenu(host, blockId) {
+  const block = host.querySelector(`[data-bre-block-id="${blockId}"]`);
+  fire(block, 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  fire(handle, 'pointerdown', { clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointerup', { clientX: 5, clientY: 5, pointerId: 1 });
+  return document.querySelector('.bre-block-menu');
+}
+
+test('handle click (no drag) opens the block menu; keyboard Delete removes the block', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(media());
+  const menu = openHandleMenu(host, 'img');
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.getAttribute('role'), 'menu');
+  const labels = Array.from(menu.querySelectorAll('[role="menuitem"]')).map((e) => e.textContent);
+  assert.deepEqual(labels, ['Replace…', 'Duplicate', 'Delete'], 'media gets Replace');
+  fire(menu, 'keydown', { key: 'End' });
+  fire(menu, 'keydown', { key: 'Enter' });
+  assert.equal(menu.hidden, true);
+  assert.deepEqual(ids(ed), ['a', 'hr', 'aud', 'z']);
+  ed.destroy();
+});
+
+test('handle drag past the threshold does NOT open the menu', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(media());
+  fire(host.querySelector('[data-bre-block-id="img"]'), 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  fire(handle, 'pointerdown', { clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointermove', { clientX: 5, clientY: 40, pointerId: 1 });
+  fire(handle, 'pointerup', { clientX: 5, clientY: 40, pointerId: 1 });
+  assert.equal(document.querySelector('.bre-block-menu').hidden, true);
+  ed.destroy();
+});
+
+test('block menu: Duplicate copies with fresh ids (also nested in columns); Escape closes', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([
+    { id: 'c', type: 'columns', data: { columns: [[para('x', 'LEFT')], [para('y', 'RIGHT')]] } },
+    { id: 't', type: 'table', data: { rows: [['a'], ['b']] } },
+  ]));
+  let menu = openHandleMenu(host, 't');
+  assert.deepEqual(Array.from(menu.querySelectorAll('[role="menuitem"]')).map((e) => e.textContent), ['Duplicate', 'Delete']);
+  fire(menu, 'keydown', { key: 'Enter' }); // Duplicate (first item)
+  const blocks = ed.getJSON().blocks;
+  assert.deepEqual(blocks.map((b) => b.type), ['columns', 'table', 'table']);
+  assert.notEqual(blocks[1].id, blocks[2].id);
+  assert.deepEqual(blocks[1].data.rows, blocks[2].data.rows);
+  menu = openHandleMenu(host, 'c');
+  fire(menu, 'keydown', { key: 'Enter' });
+  const cols = ed.getJSON().blocks.filter((b) => b.type === 'columns');
+  assert.equal(cols.length, 2);
+  const allIds = cols.flatMap((c) => [c.id, ...c.data.columns.flat().map((s) => s.id)]);
+  assert.equal(new Set(allIds).size, allIds.length, 'every id in the copy is new');
+  menu = openHandleMenu(host, 't');
+  fire(menu, 'keydown', { key: 'Escape' });
+  assert.equal(menu.hidden, true);
+  ed.destroy();
+});
+
+test('Alt+Shift+M opens the block menu from the keyboard', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x')]));
+  fire(host.querySelector('[data-bre-field]'), 'keydown', { key: 'M', altKey: true, shiftKey: true });
+  assert.equal(document.querySelector('.bre-block-menu').hidden, false);
+  fire(document.querySelector('.bre-block-menu'), 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('read-only: no selection, no block menu', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE', readOnly: true });
+  ed.setJSON(media());
+  fire(host.querySelector('.bre-image'), 'click');
+  assert.equal(host.querySelectorAll('[data-bre-selected]').length, 0);
+  const menu = openHandleMenu(host, 'img');
+  assert.ok(!menu || menu.hidden);
+  ed.destroy();
+});

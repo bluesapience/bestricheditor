@@ -17,7 +17,7 @@
  * @param {{ messages: object, isReadOnly: () => boolean, onMove: (info) => void }} hooks
  */
 export function initDragHandles(root, content, state, renderer, hooks) {
-  const { messages, isReadOnly, onMove } = hooks;
+  const { messages, isReadOnly, onMove, onHandleClick } = hooks;
 
   const handle = document.createElement('div');
   handle.className = 'bre-drag-handle';
@@ -38,6 +38,8 @@ export function initDragHandles(root, content, state, renderer, hooks) {
   let dragBlockId = null;
   let targetIndex = -1;
   let lastClientY = 0;
+  let pending = null; // pointerdown on the handle, not yet a drag
+  const DRAG_THRESHOLD = 4; // px of movement before a press becomes a drag
 
   /** Climb from any node to its top-level block wrapper. */
   function topLevelBlock(node) {
@@ -115,14 +117,24 @@ export function initDragHandles(root, content, state, renderer, hooks) {
     const h = e.target.closest('[data-bre-handle]');
     if (!h || !hoveredEl || isReadOnly()) return;
     e.preventDefault();
-    dragging = true;
-    dragBlockId = hoveredEl.getAttribute('data-bre-block-id');
-    targetIndex = -1;
-    hoveredEl.setAttribute('data-bre-dragging', '');
+    // A press only becomes a drag after moving; a plain click opens the block menu.
+    pending = { id: hoveredEl.getAttribute('data-bre-block-id'), x: e.clientX, y: e.clientY };
     try { root.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
   }
 
+  function startDrag() {
+    dragging = true;
+    dragBlockId = pending.id;
+    targetIndex = -1;
+    pending = null;
+    if (hoveredEl) hoveredEl.setAttribute('data-bre-dragging', '');
+  }
+
   function onPointerMove(e) {
+    if (pending && !dragging) {
+      if (Math.hypot(e.clientX - pending.x, e.clientY - pending.y) < DRAG_THRESHOLD) return;
+      startDrag();
+    }
     if (!dragging) return;
     lastClientY = e.clientY;
     targetIndex = calcDropIndex(lastClientY);
@@ -157,8 +169,20 @@ export function initDragHandles(root, content, state, renderer, hooks) {
     onMove({ blockId: id, from, to });
   }
 
-  function onPointerUp(e) { endDrag(e, true); }
-  function onPointerCancel(e) { endDrag(e, false); }
+  function onPointerUp(e) {
+    if (pending && !dragging) {
+      const id = pending.id;
+      pending = null;
+      try { root.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      if (onHandleClick) onHandleClick({ blockId: id, anchorRect: handle.getBoundingClientRect() });
+      return;
+    }
+    endDrag(e, true);
+  }
+  function onPointerCancel(e) {
+    pending = null;
+    endDrag(e, false);
+  }
 
   // ── Keyboard alternative ────────────────────────────────────────────────
 

@@ -219,6 +219,18 @@
   font-weight: bold;
 }
 
+/* A selected non-text block (image, audio, video, divider…): Backspace/Delete removes it. */
+.bre-block[data-bre-selected] {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+.bre-block-menu:focus {
+  outline: none;
+}
+.bre-block[data-bre-selectable] {
+  cursor: default;
+}
+
 /* Visually hidden live region for screen-reader announcements. */
 .bre-sr-only {
   position: absolute;

@@ -37,6 +37,7 @@ import { migrateDocument, CURRENT_VERSION } from './migrate.js';
 import { createSlashMenu } from '../ui/slashMenu.js';
 import { initDragHandles } from '../ui/dragHandle.js';
 import { createInlineToolbar } from '../ui/inlineToolbar.js';
+import { createBlockMenu } from '../ui/blockMenu.js';
 
 // Register all block types (side effects)
 import '../blocks/formula.js';
@@ -202,8 +203,10 @@ export function createEditor(container, options = {}) {
   renderer.renderAll(state.getBlocks());
 
   const slashMenu = createSlashMenu(onSlashSelect, { messages });
+  const blockMenu = createBlockMenu({ messages });
   const drag = initDragHandles(root, content, state, renderer, {
     messages,
+    onHandleClick: ({ blockId, anchorRect }) => openBlockMenu(blockId, anchorRect),
     isReadOnly: () => readOnly,
     onMove({ from, to }) {
       announce(fmt(messages.blockMoved, { n: to + 1, total: state.getBlocks().length }));
@@ -313,6 +316,7 @@ export function createEditor(container, options = {}) {
   root.addEventListener('keydown', handleKeydown);
   root.addEventListener('paste', handlePaste);
   root.addEventListener('click', handleClick);
+  root.addEventListener('dblclick', handleDblClick);
   root.addEventListener('drop', handleDrop);
   root.addEventListener('dragover', handleDragOver);
   root.addEventListener('focusin', handleFocusIn);
@@ -321,7 +325,8 @@ export function createEditor(container, options = {}) {
 
   // ── Focus / selection events ───────────────────────────────────────────────
   let hasFocus = false;
-  function handleFocusIn() {
+  function handleFocusIn(e) {
+    if (selectedEl && e.target !== selectedEl) clearSelection();
     if (hasFocus) return;
     hasFocus = true;
     emitter.emit('focus', undefined);
@@ -387,6 +392,9 @@ export function createEditor(container, options = {}) {
   async function handleClick(e) {
     if (readOnly) return;
 
+    // Clicking anywhere outside the selected block clears the selection.
+    if (selectedEl && !selectedEl.contains(e.target)) clearSelection();
+
     // Table toolbar actions
     const tableActionEl = e.target.closest('[data-bre-table-action]');
     if (tableActionEl) {
@@ -415,8 +423,107 @@ export function createEditor(container, options = {}) {
       const blockEl = closestBlock(mediaEl);
       const block = blockEl && state.findBlockAnywhere(blockEl.getAttribute('data-bre-block-id')).block;
       if (!block || !MEDIA_TYPES.has(block.type)) return;
-      await setMediaSource(block);
+      // An empty placeholder IS the "set source" affordance; a loaded media
+      // block is selected (Notion-style) so Backspace/Delete can remove it.
+      if (/placeholder/.test(mediaEl.className)) await setMediaSource(block);
+      else selectBlock(block.id);
+      return;
     }
+
+    // Divider: nothing to focus, so clicking selects it.
+    const hrEl = e.target.closest('.bre-divider');
+    if (hrEl) {
+      const blockEl = closestBlock(hrEl);
+      if (blockEl) selectBlock(blockEl.getAttribute('data-bre-block-id'));
+    }
+  }
+
+  // Double-click a loaded media block to replace its source.
+  async function handleDblClick(e) {
+    if (readOnly) return;
+    const mediaEl = e.target.closest('.bre-image, .bre-audio, .bre-video, .bre-video-embed');
+    if (!mediaEl) return;
+    const blockEl = closestBlock(mediaEl);
+    const block = blockEl && state.findBlockAnywhere(blockEl.getAttribute('data-bre-block-id')).block;
+    if (block && MEDIA_TYPES.has(block.type)) await setMediaSource(block);
+  }
+
+  // ── Block selection (images, audio, video, dividers) ───────────────────────
+  let selectedEl = null;
+
+  function selectBlock(id) {
+    const el = renderer.getBlockEl(id);
+    if (!el) return;
+    if (selectedEl && selectedEl !== el) clearSelection();
+    selectedEl = el;
+    el.setAttribute('data-bre-selected', '');
+    el.setAttribute('tabindex', '-1');
+    el.focus({ preventScroll: true });
+    announce(messages.blockSelected);
+  }
+
+  function clearSelection() {
+    if (!selectedEl) return;
+    selectedEl.removeAttribute('data-bre-selected');
+    selectedEl.removeAttribute('tabindex');
+    selectedEl = null;
+  }
+
+  /** Focus a block's text field if it has one, otherwise select the block. */
+  function focusOrSelect(id, atEnd) {
+    const el = renderer.getBlockEl(id);
+    if (!el) return;
+    if (el.querySelector('[data-bre-field]')) {
+      if (atEnd) focusBlockEnd(id); else focusBlock(id, 0);
+    } else {
+      selectBlock(id);
+    }
+  }
+
+  // ── Block actions menu (handle click / Alt+Shift+M) ────────────────────────
+  function openBlockMenu(blockId, anchorRect) {
+    if (readOnly) return;
+    const { block } = state.findBlockAnywhere(blockId);
+    if (!block) return;
+    const items = [];
+    if (MEDIA_TYPES.has(block.type)) items.push({ id: 'replace', label: messages.menuReplace });
+    items.push({ id: 'duplicate', label: messages.menuDuplicate }, { id: 'delete', label: messages.menuDelete });
+    blockMenu.show(anchorRect, items, (action) => {
+      if (action === 'delete') deleteBlock(blockId);
+      else if (action === 'duplicate') duplicateBlock(blockId);
+      else if (action === 'replace') setMediaSource(block);
+    }, () => focusOrSelect(blockId));
+  }
+
+  function cloneWithNewIds(block) {
+    const copy = JSON.parse(JSON.stringify(block));
+    const reid = (b) => {
+      b.id = generateId();
+      if (b.data && Array.isArray(b.data.columns)) for (const col of b.data.columns) for (const sub of col) reid(sub);
+    };
+    reid(copy);
+    return copy;
+  }
+
+  function duplicateBlock(blockId) {
+    const { block, context } = state.findBlockAnywhere(blockId);
+    if (!block) return;
+    state.saveUndoSnapshot();
+    const copy = cloneWithNewIds(block);
+    if (context === null) {
+      state.addBlock(copy, blockId);
+      renderer.insertBlock(copy, blockId);
+    } else {
+      const { columnsBlockId, colIndex, indexInCol } = context;
+      const col = state.getBlock(columnsBlockId).data.columns[colIndex].slice();
+      col.splice(indexInCol + 1, 0, copy);
+      state.updateColumnBlock(columnsBlockId, colIndex, col);
+      renderer.updateBlock(state.getBlock(columnsBlockId));
+    }
+    updatePlaceholder();
+    focusOrSelect(copy.id);
+    announce(messages.blockDuplicated);
+    notifyChange();
   }
 
   async function setMediaSource(block) {
@@ -465,6 +572,7 @@ export function createEditor(container, options = {}) {
   function deleteBlock(blockId) {
     const { block, context } = state.findBlockAnywhere(blockId);
     if (!block) return;
+    clearSelection();
     state.saveUndoSnapshot();
     let focusId = null;
     if (context === null) {
@@ -491,7 +599,7 @@ export function createEditor(container, options = {}) {
       focusId = col[Math.min(indexInCol, col.length - 1)].id;
     }
     updatePlaceholder();
-    if (focusId) focusBlock(focusId, 0);
+    if (focusId) focusOrSelect(focusId);
     announce(messages.blockDeleted);
     notifyChange();
   }
@@ -630,6 +738,38 @@ export function createEditor(container, options = {}) {
     }
 
     if (readOnly) return;
+
+    // A selected (non-text) block owns the keyboard until focus moves.
+    if (selectedEl && e.target === selectedEl) {
+      const id = selectedEl.getAttribute('data-bre-block-id');
+      if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); deleteBlock(id); return; }
+      if (e.key === 'Escape') { e.preventDefault(); clearSelection(); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const field = selectedEl.querySelector('[data-bre-field]');
+        if (field) field.focus();
+        else openBlockMenu(id, selectedEl.getBoundingClientRect());
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const i = state.getBlockIndex(id);
+        const n = state.getBlocks()[i + (e.key === 'ArrowDown' ? 1 : -1)];
+        if (n) focusOrSelect(n.id, e.key === 'ArrowUp');
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey && !(e.altKey && e.shiftKey)) return; // ignore stray typing
+    }
+
+    // Alt+Shift+M: open the block actions menu for the current block.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'm') {
+      const be = closestBlock(e.target);
+      if (be) {
+        e.preventDefault();
+        openBlockMenu(be.getAttribute('data-bre-block-id'), be.getBoundingClientRect());
+        return;
+      }
+    }
 
     // Ctrl/Cmd+Shift+Backspace: delete the whole block the caret is in.
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Backspace') {
@@ -1505,12 +1645,14 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('keydown', handleKeydown);
     root.removeEventListener('paste', handlePaste);
     root.removeEventListener('click', handleClick);
+    root.removeEventListener('dblclick', handleDblClick);
     root.removeEventListener('drop', handleDrop);
     root.removeEventListener('dragover', handleDragOver);
     root.removeEventListener('focusin', handleFocusIn);
     root.removeEventListener('focusout', handleFocusOut);
     document.removeEventListener('selectionchange', handleSelectionChange);
     slashMenu.destroy();
+    blockMenu.destroy();
     inlineToolbar.destroy();
     drag.destroy();
     renderer.destroy();

@@ -84,7 +84,7 @@
     {
       "name": "ESM entry (min+gz)",
       "path": "dist/bre.esm.js",
-      "limit": "37 kB",
+      "limit": "40 kB",
       "gzip": true
     },
     {

@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Added
+- **Notion-style block selection and menu**: click image/audio/video/divider to select, `Backspace`/`Delete` removes; click the drag handle (or `Alt+Shift+M`) for a Replace / Duplicate / Delete menu; double-click media to replace. A single click on loaded media no longer opens the URL prompt (empty placeholders still do).
 - **Delete a block**: "Delete table" button, `Ctrl/Cmd+Shift+Backspace` on any block, and Backspace at the start of the block after a divider.
 - **Read-only mode** (`readOnly` option, `setReadOnly()` / `isReadOnly()`) in all three modes.
 - **Placeholder** option for all modes (shown in an empty editor).
