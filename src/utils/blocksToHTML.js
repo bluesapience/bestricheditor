@@ -49,7 +49,7 @@ function escapeText(s) {
  * @param {{trusted?: boolean}} [opts]
  * @returns {string}
  */
-export function blockToHTML(block, { trusted = false } = {}) {
+export function blockToHTML(block, { trusted = false, embedAllowlist } = {}) {
   if (!block) return '';
   const d = block.data || {};
   const type = block.type;
@@ -64,7 +64,7 @@ export function blockToHTML(block, { trusted = false } = {}) {
     return `<${tag}>${inner}</${tag}>`;
   }
   if (blockRegistry.has(type)) {
-    const raw = blockRegistry.get(type).toHTML(block);
+    const raw = blockRegistry.get(type).toHTML(block, embedAllowlist ? { embedAllowlist } : undefined);
     if (!raw) return '';
     // code/divider output is fully escaped by the plugin — skip DOMPurify
     if (type === 'code' || type === 'divider') return raw;

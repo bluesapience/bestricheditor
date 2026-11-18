@@ -269,7 +269,9 @@ function emit(blocks, items, counter) {
       }
       case 'columns': {
         warnOnce('columns', 'columns layout flattened to a single column when converting to markdown');
-        const cols = Array.isArray(d.children) ? d.children : (Array.isArray(b.children) ? [b.children] : []);
+        const cols = Array.isArray(d.columns) ? d.columns
+          : Array.isArray(d.children) ? d.children
+          : (Array.isArray(b.children) ? [b.children] : []);
         for (const col of cols) emit(Array.isArray(col) ? col : [], items, counter);
         continue;
       }

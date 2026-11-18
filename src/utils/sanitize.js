@@ -4,6 +4,10 @@
  */
 import DOMPurify from 'dompurify';
 
+// Never allowed in editor content: they can restyle the host page (style), phish (form controls)
+// or pull in external resources (link/meta/base).
+export const FORBIDDEN_TAGS = ['style', 'form', 'input', 'button', 'textarea', 'select', 'option', 'link', 'meta', 'base', 'object', 'embed'];
+
 const KATEX_TAGS = [
   'math', 'semantics', 'annotation', 'mrow', 'mi', 'mn', 'mo',
   'mspace', 'mtext', 'mstyle', 'mfrac', 'msqrt', 'mover', 'munder',
@@ -82,7 +86,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
   // and style attributes can smuggle url()/expression()). KaTeX output is the
   // one exception — it needs style for layout — and is scrubbed by a hook below.
   if (!allowKaTeX && !allowMedia) {
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], ...extra });
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], FORBID_TAGS: FORBIDDEN_TAGS, ...extra });
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
@@ -116,6 +120,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
     USE_PROFILES: { html: true, ...(allowKaTeX ? { svg: true, mathMl: true } : {}) },
     ADD_ATTR: addAttr,
     ADD_TAGS: addTags,
+    FORBID_TAGS: FORBIDDEN_TAGS,
     ...(allowKaTeX ? {} : { FORBID_ATTR: ['style'] }),
     ...extra,
   });

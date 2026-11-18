@@ -162,3 +162,27 @@ test('i18n: dir option sets direction', () => {
   assert.equal(host.querySelector('.bre-editor').getAttribute('dir'), 'rtl');
   ed.destroy();
 });
+
+test('embedAllowlist is honored by BREM and BREW output', () => {
+  const vid = doc([{ id: 'v', type: 'video', data: { src: 'https://www.youtube.com/watch?v=abcdefghijk' } }]);
+  for (const mode of ['BREM', 'BREW']) {
+    const allowed = createEditor(mount(), { mode, embedAllowlist: ['youtube.com'] });
+    allowed.setJSON(vid);
+    assert.match(allowed.getHTML(), /<iframe/, mode + ' allows youtube');
+    const blocked = createEditor(mount(), { mode, embedAllowlist: [] });
+    blocked.setJSON(vid);
+    assert.doesNotMatch(blocked.getHTML(), /<iframe/, mode + ' blocks when not allowlisted');
+    allowed.destroy(); blocked.destroy();
+  }
+});
+
+test('BREW: typing into a bare text node gets wrapped in a paragraph', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  const surface = host.querySelector('.bre-brew-surface');
+  surface.appendChild(document.createTextNode('typed on a bare line'));
+  surface.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.equal(surface.firstElementChild.nodeName, 'P');
+  assert.equal(surface.firstElementChild.textContent, 'typed on a bare line');
+  ed.destroy();
+});

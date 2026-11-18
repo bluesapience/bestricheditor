@@ -4,6 +4,7 @@
 import { katexReady, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { elt, escapeHTML } from '../utils/dom.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { sanitizeToFragment } from '../utils/sanitize.js';
 import { DEFAULT_MESSAGES } from '../core/messages.js';
 
 
@@ -12,7 +13,11 @@ function renderLatexInto(wrapper, latex, displayMode) {
   const katex = getKaTeX();
   if (!katex) return;
   try {
-    wrapper.innerHTML = katex.renderToString(latex, { displayMode, throwOnError: false, output: 'html' });
+    // Sanitize KaTeX output too (project rule: no unsanitized innerHTML).
+    wrapper.replaceChildren(sanitizeToFragment(
+      katex.renderToString(latex, { displayMode, throwOnError: false, output: 'html' }),
+      { allowKaTeX: true },
+    ));
   } catch {
     wrapper.textContent = latex;
   }

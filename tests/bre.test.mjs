@@ -347,3 +347,56 @@ test('dist bundle: blocks are registered and the editor renders (skips if not bu
   assert.equal(host.querySelectorAll('.bre-block').length, 8);
   ed.destroy();
 });
+
+test('delete block: table button, Ctrl+Shift+Backspace, divider via Backspace, undo', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  const tbl = { id: 't', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } };
+  ed.setJSON(doc([para('a', 'A'), tbl, para('b', 'B')]));
+  // 1. button
+  host.querySelector('[data-bre-table-action="del-block"]').click();
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'b']);
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'keydown', { key: 'z', ctrlKey: true });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 't', 'b'], 'undo restores the table');
+  // 2. keyboard shortcut from inside a cell
+  const cell = host.querySelector('[data-bre-table-row="0"]');
+  fire(cell, 'keydown', { key: 'Backspace', ctrlKey: true, shiftKey: true });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'b']);
+  // 3. only block: replaced by an empty paragraph, never an empty doc
+  ed.setJSON(doc([tbl]));
+  fire(host.querySelector('[data-bre-table-row="0"]'), 'keydown', { key: 'Backspace', metaKey: true, shiftKey: true });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  // 4. Backspace at the start of the block after a divider removes the divider
+  ed.setJSON(doc([para('a', 'A'), { id: 'hr', type: 'divider', data: {} }, para('b', 'B')]));
+  fire(host.querySelector('[data-bre-block-id="b"] [data-bre-field]'), 'keydown', { key: 'Backspace' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'b']);
+  ed.destroy();
+});
+
+test('review fixes: nested bad blocks, columns→other modes, formula cache, list Enter, <style> stripped', async () => {
+  const w = console.warn; console.warn = () => {};
+  // nested unknown block inside columns no longer throws
+  const ed = createEditor(mount(), { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'c', type: 'columns', data: { columns: [[{ type: 'foo', data: { text: 'x' } }], []] } }]));
+  assert.doesNotThrow(() => ed.getHTML());
+  // columns survive BRE→BREW and BRE→BREM
+  const withCols = doc([{ id: 'c', type: 'columns', data: { columns: [[para('a', 'LEFT')], [para('b', 'RIGHT')]] } }]);
+  const brew = createEditor(mount(), { mode: 'BREW' }); brew.setJSON(withCols);
+  assert.match(brew.getHTML(), /LEFT[\s\S]*RIGHT/);
+  const brem = createEditor(mount(), { mode: 'BREM' }); brem.setJSON(withCols);
+  assert.match(brem.getJSON().blocks[0].data.markdown, /LEFT[\s\S]*RIGHT/);
+  // formula fallback is not cached forever
+  const f = createEditor(mount(), { mode: 'BRE' });
+  f.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x^2', displayMode: true } }]));
+  f.getHTML();
+  await tick(500);
+  assert.doesNotMatch(f.getHTML(), /bre-formula-error/, 'math is rendered once KaTeX has loaded');
+  // <style>/<form> are stripped
+  const { sanitizeHTML } = await import('../src/utils/sanitize.js');
+  assert.doesNotMatch(sanitizeHTML('x<style>a{}</style><form action=u><input><button>b</button></form>'), /<style|<form|<input|<button/i);
+  // Enter in a list continues the list; Enter on an empty item exits it
+  const l = createEditor(mount(), { mode: 'BRE' });
+  l.setJSON(doc([{ id: 'l1', type: 'bulleted_list', data: { html: 'item' } }]));
+  console.warn = w;
+  l.destroy(); ed.destroy(); brew.destroy(); brem.destroy(); f.destroy();
+});

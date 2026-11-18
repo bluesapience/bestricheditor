@@ -52,7 +52,12 @@ const prodConfigs = [
   // UMD core: bundles DOMPurify, loads KaTeX lazily from bre.katex.umd.js
   {
     input: 'src/bre.js',
-    output: { file: 'dist/bre.umd.js', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true, sourcemap: true },
+    output: [
+      { file: 'dist/bre.umd.js', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true, sourcemap: true },
+      // package.json has "type":"module", so Node would parse a .js UMD as ESM.
+      // Same bundle with a .cjs extension is what require() must load.
+      { file: 'dist/bre.umd.cjs', format: 'umd', name: 'bre', exports: 'named', inlineDynamicImports: true },
+    ],
     plugins: [
       katexVariant('umd'),
       nodeResolve(),

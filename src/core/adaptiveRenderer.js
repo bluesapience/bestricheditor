@@ -39,6 +39,12 @@ export function createAdaptiveRenderer(container, state, ctx, { virtualize = 'au
       ensure(want(blocks.length));
       impl.renderAll(blocks);
     },
+    /** Structural re-render that keeps the scroll window when virtualized. */
+    refresh(blocks) {
+      if (isVirtual && impl.refresh) impl.refresh(blocks);
+      else this.renderAll(blocks);
+    },
+    firstRenderedIndex: () => (isVirtual && impl.firstRenderedIndex ? impl.firstRenderedIndex() : 0),
     updateBlock: (b) => impl.updateBlock(b),
     insertBlock: (b, afterId) => impl.insertBlock(b, afterId),
     removeBlock: (id) => impl.removeBlock(id),

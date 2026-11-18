@@ -32,11 +32,15 @@ export function unescapeMarkdown(str) {
 const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus']);
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'avi', 'mkv']);
 
+// Active embed allowlist for the current parse (null = YouTube/Vimeo defaults).
+let _embedAllow = null;
+
 /** Extract embed URL for YouTube / Vimeo, or null for other URLs. */
 function getEmbedUrl(src) {
   try {
     const url = new URL(src);
     const host = url.hostname.replace(/^www\./, '');
+    if (_embedAllow && !_embedAllow.some(d => host === d || host.endsWith('.' + d))) return null;
     if (host === 'youtube.com' || host === 'youtu.be') {
       const id = host === 'youtu.be'
         ? url.pathname.slice(1).split('?')[0]
@@ -490,7 +494,17 @@ function tokenizeMarkdown(text) {
 /**
  * Parse a markdown string into an HTML string (preview rendering).
  */
-export function parseMarkdown(text) {
+export function parseMarkdown(text, options) {
+  const prev = _embedAllow;
+  _embedAllow = (options && options.embedAllowlist) || null;
+  try {
+    return parseMarkdownInner(text);
+  } finally {
+    _embedAllow = prev;
+  }
+}
+
+function parseMarkdownInner(text) {
   const out = [];
   for (const tok of tokenizeMarkdown(text)) {
     switch (tok.t) {

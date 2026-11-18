@@ -108,6 +108,15 @@ export function createInlineToolbar(root, { handleLinkInsert, messages, isReadOn
     code.parentNode.replaceChild(frag, code);
   }
 
+  /** Programmatic DOM edits fire no input event: tell the editor the field changed. */
+  function notifyFieldChanged() {
+    const sel = window.getSelection();
+    if (!sel || !sel.anchorNode) return;
+    const el = sel.anchorNode.nodeType === Node.TEXT_NODE ? sel.anchorNode.parentElement : sel.anchorNode;
+    const field = el && el.closest ? el.closest('[data-bre-field]') : null;
+    if (field) field.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
   function handleMark(mark) {
     if (mark === 'bold')           document.execCommand('bold');
     else if (mark === 'italic')    document.execCommand('italic');
@@ -115,6 +124,7 @@ export function createInlineToolbar(root, { handleLinkInsert, messages, isReadOn
     else if (mark === 'code') {
       if (isInsideCode()) unwrapCode();
       else wrapInCode();
+      notifyFieldChanged();
     }
     updateActiveStates();
   }

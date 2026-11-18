@@ -17,6 +17,8 @@ export const DEFAULT_MESSAGES = {
   delRow: '− Row',
   addCol: '+ Col',
   delCol: '− Col',
+  delTable: 'Delete table',
+  blockDeleted: 'Block deleted',
   formulaEmpty: 'Click to add formula…',
   imageEmpty: 'Click to set image URL',
   audioEmpty: 'Click to set audio URL',

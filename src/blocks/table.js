@@ -54,6 +54,7 @@ blockRegistry.register('table', {
       { action: 'del-row', label: m.delRow },
       { action: 'add-col', label: m.addCol },
       { action: 'del-col', label: m.delCol },
+      { action: 'del-block', label: m.delTable },
     ].forEach(({ action, label }) => {
       const btn = document.createElement('button');
       btn.type = 'button';

@@ -36,6 +36,7 @@ export function createVirtualRenderer(container, state, ctx) {
   let visibleStart = 0;
   let visibleEnd = -1;
   let rafPending = false;
+  let destroyed = false;
 
   // Cached layout values — refreshed once at attach time and on resize.
   let scrollParent = null;
@@ -239,7 +240,7 @@ export function createVirtualRenderer(container, state, ctx) {
     rafPending = true;
     requestAnimationFrame(() => {
       rafPending = false;
-      if (blocks.length === 0) return;
+      if (destroyed || !scrollParent || blocks.length === 0) return;
       const { newStart, newEnd } = calcVisibleWindow();
       reconcile(newStart, newEnd);
     });
@@ -320,8 +321,54 @@ export function createVirtualRenderer(container, state, ctx) {
 
     // Measure actual heights after first paint — corrects spacer estimates.
     requestAnimationFrame(() => {
-      if (blocks.length > 0) measureVisibleAndUpdateSpacers();
+      if (!destroyed && scrollParent && blocks.length > 0) measureVisibleAndUpdateSpacers();
     });
+  }
+
+  /**
+   * Re-render after a structural change (drag move, undo, keyboard move) WITHOUT
+   * resetting scroll position: keep the current window and cached heights.
+   */
+  function refresh(newBlocks) {
+    const oldStart = visibleStart;
+    blocks = newBlocks;
+    prevBlockCount = blocks.length;
+    blockMap.clear();
+    invalidatePrefix();
+    container.textContent = '';
+    container.appendChild(topSpacer);
+    container.appendChild(bottomSpacer);
+    if (blocks.length === 0) {
+      visibleStart = 0;
+      visibleEnd = -1;
+      updateSpacers();
+      return;
+    }
+    let start = Math.min(oldStart, blocks.length - 1);
+    // Re-derive from the real scroll position when we can (cheap, cached offsets).
+    if (scrollParent) {
+      const w = calcVisibleWindow();
+      start = w.newStart;
+      visibleStart = start;
+      visibleEnd = w.newEnd;
+    } else {
+      visibleStart = start;
+      visibleEnd = Math.min(blocks.length - 1, start + OVERSCAN * 2);
+    }
+    const frag = document.createDocumentFragment();
+    for (let i = visibleStart; i <= visibleEnd; i++) {
+      const el = renderBlockEl(blocks[i]);
+      blockMap.set(blocks[i].id, el);
+      frag.appendChild(el);
+      if (blocks[i].type === 'columns') registerSubBlocks(blocks[i]);
+    }
+    container.insertBefore(frag, bottomSpacer);
+    updateSpacers();
+  }
+
+  /** Index (in the full document) of the first block currently in the DOM. */
+  function firstRenderedIndex() {
+    return visibleStart;
   }
 
   function updateBlock(block) {
@@ -374,6 +421,7 @@ export function createVirtualRenderer(container, state, ctx) {
   }
 
   function destroy() {
+    destroyed = true;
     detachScroll();
     unsubscribe();
     blockMap.clear();
@@ -388,6 +436,8 @@ export function createVirtualRenderer(container, state, ctx) {
     removeBlock,
     getBlockEl,
     registerSubBlocks,
+    refresh,
+    firstRenderedIndex,
     destroy,
   };
 }

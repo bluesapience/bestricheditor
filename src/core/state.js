@@ -55,6 +55,9 @@ export function createState(initialDoc) {
   // ── History (reference snapshots) ──────────────────────────────────────────
 
   function saveUndoSnapshot() {
+    // Nothing changed since the last snapshot (no-op key presses): don't push a
+    // duplicate or wipe the redo stack.
+    if (undoStack.length && undoStack[undoStack.length - 1] === doc.blocks) return;
     undoStack.push(doc.blocks);
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack = [];

@@ -22,7 +22,7 @@ import {
   setCursorOffset,
 } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
-import { setKaTeXCssUrl, ensureKaTeXStyles } from '../utils/katex-lazy.js';
+import { setKaTeXCssUrl, ensureKaTeXStyles, getKaTeX, loadKaTeX } from '../utils/katex-lazy.js';
 import { cleanPastedHTML } from '../utils/pasteClean.js';
 import { markdownToBlocks } from '../utils/markdown.js';
 import { transforms } from './transforms.js';
@@ -84,8 +84,12 @@ function makeBlock(type, data) {
 }
 
 // Paste pipeline (global, registered once). Steps: clean → parse.
+let pastePipelineInstalled = false;
 function ensurePastePipeline() {
-  if (transforms.has('paste')) return;
+  // Own flag (not transforms.has): a user step registered earlier must not
+  // suppress the built-in clean + parse steps.
+  if (pastePipelineInstalled) return;
+  pastePipelineInstalled = true;
   transforms.register('paste', (payload) => ({ ...payload, html: cleanPastedHTML(payload.html) }), { order: 10 });
   transforms.register('paste', (payload) => ({ ...payload, blocks: htmlToBlocks(payload.html) }), { order: 20 });
 }
@@ -171,10 +175,23 @@ export function createEditor(container, options = {}) {
     updateBlockData(blockId, data) {
       if (readOnly) return;
       scheduleUndoSnapshot();
-      state.updateBlockData(blockId, data);
+      updateDataAnywhere(blockId, data);
       notifyChange();
     },
   };
+
+  /** Merge data into a block that may live at top level or inside a column. */
+  function updateDataAnywhere(id, data) {
+    const { block, context } = state.findBlockAnywhere(id);
+    if (!block) return;
+    if (context === null) {
+      state.updateBlockData(id, data);
+    } else {
+      const { columnsBlockId, colIndex } = context;
+      const col = state.getBlock(columnsBlockId).data.columns[colIndex];
+      state.updateColumnBlock(columnsBlockId, colIndex, col.map((b) => (b.id === id ? { ...b, data: { ...b.data, ...data } } : b)));
+    }
+  }
 
   const renderer = createAdaptiveRenderer(content, state, ctx, {
     virtualize: opts.virtualize,
@@ -436,10 +453,46 @@ export function createEditor(container, options = {}) {
       case 'del-row': if (rows.length > 1) rows = rows.slice(0, -1); break;
       case 'add-col': rows = rows.map(r => [...r, '']); break;
       case 'del-col': if (rows[0].length > 1) rows = rows.map(r => r.slice(0, -1)); break;
+      case 'del-block': deleteBlock(blockId); return;
       default: return;
     }
     state.updateBlockData(blockId, { rows });
     renderer.updateBlock(state.getBlock(blockId));
+    notifyChange();
+  }
+
+  // ── Delete a whole block (top-level or column child) ───────────────────────
+  function deleteBlock(blockId) {
+    const { block, context } = state.findBlockAnywhere(blockId);
+    if (!block) return;
+    state.saveUndoSnapshot();
+    let focusId = null;
+    if (context === null) {
+      const idx = state.getBlockIndex(blockId);
+      const blocks = state.getBlocks();
+      const neighbor = blocks[idx + 1] || blocks[idx - 1] || null;
+      state.removeBlock(blockId);
+      renderer.removeBlock(blockId);
+      if (state.getBlocks().length === 0) {
+        const p = makeBlock('paragraph', { html: '' });
+        state.addBlock(p);
+        renderer.insertBlock(p, null);
+        focusId = p.id;
+      } else {
+        focusId = neighbor && neighbor.id;
+      }
+    } else {
+      const { columnsBlockId, colIndex, indexInCol } = context;
+      const col = state.getBlock(columnsBlockId).data.columns[colIndex].slice();
+      col.splice(indexInCol, 1);
+      if (col.length === 0) col.push(makeBlock('paragraph', { html: '' })); // columns are never empty
+      state.updateColumnBlock(columnsBlockId, colIndex, col);
+      renderer.updateBlock(state.getBlock(columnsBlockId));
+      focusId = col[Math.min(indexInCol, col.length - 1)].id;
+    }
+    updatePlaceholder();
+    if (focusId) focusBlock(focusId, 0);
+    announce(messages.blockDeleted);
     notifyChange();
   }
 
@@ -468,7 +521,7 @@ export function createEditor(container, options = {}) {
       if (def && typeof def.serialize === 'function') {
         scheduleUndoSnapshot();
         const data = def.serialize(blockEl.firstElementChild);
-        if (data) state.updateBlockData(id, data);
+        if (data) updateDataAnywhere(id, data);
         notifyChange();
       }
       return;
@@ -578,7 +631,22 @@ export function createEditor(container, options = {}) {
 
     if (readOnly) return;
 
+    // Ctrl/Cmd+Shift+Backspace: delete the whole block the caret is in.
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Backspace') {
+      const be = closestBlock(e.target);
+      if (be) {
+        e.preventDefault();
+        deleteBlock(be.getAttribute('data-bre-block-id'));
+        return;
+      }
+    }
+
     // Slash menu navigation
+    if (slashMenu.isVisible() && !slashMenu.hasResults() && (e.key === 'Enter' || e.key === 'Tab')) {
+      // Nothing to pick: close the menu and let Enter behave normally.
+      slashMenu.hide();
+      slashBlockId = null;
+    }
     if (slashMenu.isVisible()) {
       if (e.key === 'ArrowDown') { e.preventDefault(); slashMenu.next(); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); slashMenu.prev(); return; }
@@ -591,6 +659,8 @@ export function createEditor(container, options = {}) {
     if (tableCellEl) {
       if (e.key === 'Tab') { e.preventDefault(); handleTableTab(tableCellEl, e.shiftKey); return; }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); }
+      // Cells store plain text: block native bold/italic/underline so DOM and model stay in sync.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && ['b', 'i', 'u'].includes(e.key.toLowerCase())) e.preventDefault();
       return;
     }
 
@@ -608,6 +678,9 @@ export function createEditor(container, options = {}) {
             inlineToolbar.handleMark(fmtKey);
             return;
           }
+          // Mark not supported here (heading underline, code field…): swallow the
+          // browser's native formatting so the DOM can't diverge from the model.
+          if (fmtKey !== 'code') { e.preventDefault(); return; }
         }
       }
       if (k === 'k') {
@@ -669,12 +742,23 @@ export function createEditor(container, options = {}) {
       return;
     }
 
+    // Empty list item + Enter exits the list.
+    const isList = block.type === 'bulleted_list' || block.type === 'numbered_list';
+    if (isList && fieldEl.textContent === '') {
+      replaceAnywhere(block.id, { ...block, type: 'paragraph', data: { html: '' } });
+      focusBlock(block.id, 0);
+      notifyChange();
+      return;
+    }
+    const newType = isList ? block.type : 'paragraph';
+
     const sel = window.getSelection();
     let beforeHTML = '';
     let afterHTML = '';
 
     if (sel && sel.rangeCount > 0) {
       const range = sel.getRangeAt(0);
+      if (!range.collapsed) range.deleteContents(); // Enter replaces the selection
       range.collapse(true);
       const afterRange = document.createRange();
       afterRange.selectNodeContents(fieldEl);
@@ -694,7 +778,7 @@ export function createEditor(container, options = {}) {
       const { columnsBlockId, colIndex, indexInCol } = context;
       const columnsBlock = state.getBlock(columnsBlockId);
       if (!columnsBlock) return;
-      const newPara = makeBlock('paragraph', { html: afterHTML });
+      const newPara = makeBlock(newType, { html: afterHTML });
       const col = columnsBlock.data.columns[colIndex].slice();
       col[indexInCol] = { ...block, data: { ...block.data, html: beforeHTML } };
       col.splice(indexInCol + 1, 0, newPara);
@@ -703,7 +787,7 @@ export function createEditor(container, options = {}) {
       focusBlock(newPara.id, 0);
     } else {
       state.updateBlockData(block.id, { html: beforeHTML });
-      const newPara = makeBlock('paragraph', { html: afterHTML });
+      const newPara = makeBlock(newType, { html: afterHTML });
       state.addBlock(newPara, block.id);
       renderer.insertBlock(newPara, block.id);
       updatePlaceholder();
@@ -749,6 +833,7 @@ export function createEditor(container, options = {}) {
       if (hasInline(prevBlock) && hasInline(block)) {
         const prevHTML = inlineHTMLOf(prevBlock);
         const merged = { ...prevBlock, data: { ...prevBlock.data, html: prevHTML + inlineHTMLOf(block) } };
+      markUnsafeIfMarkup(merged);
         const next = colBlocks.map((b, i) => (i === indexInCol - 1 ? merged : b)).filter((_, i) => i !== indexInCol);
         state.updateColumnBlock(columnsBlockId, colIndex, next);
         renderer.updateBlock(state.getBlock(columnsBlockId));
@@ -788,9 +873,20 @@ export function createEditor(container, options = {}) {
 
     const prevBlock = state.getBlocks()[blockIndex - 1];
 
+    // A divider has nothing to focus: Backspace at the start of the next block removes it.
+    if (prevBlock.type === 'divider') {
+      state.removeBlock(prevBlock.id);
+      renderer.removeBlock(prevBlock.id);
+      focusBlock(block.id, 0);
+      updatePlaceholder();
+      notifyChange();
+      return;
+    }
+
     if (hasInline(prevBlock) && hasInline(block)) {
       const prevHTML = inlineHTMLOf(prevBlock);
       const merged = { ...prevBlock, data: { ...prevBlock.data, html: prevHTML + inlineHTMLOf(block) } };
+      markUnsafeIfMarkup(merged);
       state.replaceBlock(prevBlock.id, merged);
       state.removeBlock(block.id);
       renderer.removeBlock(block.id);
@@ -1028,6 +1124,8 @@ export function createEditor(container, options = {}) {
       }
       return;
     }
+    // Any other file: never let the browser navigate away from the page.
+    if (dt.files && dt.files.length) { e.preventDefault(); return; }
 
     // External rich content would bypass the paste sanitizer: insert as text.
     const types = Array.from(dt.types || []);
@@ -1196,6 +1294,10 @@ export function createEditor(container, options = {}) {
   }
 
   // ── Diff render (identity based thanks to structural sharing) ──────────────
+  function markUnsafeIfMarkup(b) {
+    if (b && b.data && typeof b.data.html === 'string' && b.data.html.indexOf('<') !== -1) unsafe.add(b.id);
+  }
+
   function diffRender(oldBlocks, newBlocks) {
     let sameStructure = oldBlocks.length === newBlocks.length;
     if (sameStructure) {
@@ -1208,42 +1310,85 @@ export function createEditor(container, options = {}) {
       for (let i = 0; i < newBlocks.length; i++) {
         if (oldBlocks[i] !== newBlocks[i]) {
           renderer.updateBlock(newBlocks[i]);
+          markUnsafeIfMarkup(newBlocks[i]);
           if (!firstChanged) firstChanged = newBlocks[i];
         }
       }
       if (firstChanged) focusBlockEnd(firstChanged.id);
     } else {
-      rerenderAll();
+      // Raw browser html restored by undo/redo must be re-sanitized lazily.
+      const oldSet = new Set(oldBlocks);
+      for (const b of newBlocks) if (!oldSet.has(b)) markUnsafeIfMarkup(b);
+      refreshAll();
+      // Keep keyboard focus inside the editor so repeated Cmd+Z keeps working.
+      const i = firstDifference(oldBlocks, newBlocks);
+      const target = newBlocks[Math.min(i, newBlocks.length - 1)];
+      if (target) focusBlockEnd(target.id);
     }
     updatePlaceholder();
   }
 
+  function firstDifference(a, b) {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
+    return n;
+  }
+
+  /** Re-render after a structural edit, keeping the scroll window in virtual mode. */
+  function refreshAll() {
+    renderer.refresh(state.getBlocks());
+    placeholderEl = null;
+    drag.refresh();
+  }
+
   // ── Document normalisation ─────────────────────────────────────────────────
-  /** Make a loaded document safe to render: known types, markdown → blocks. */
-  function normalizeDoc(input) {
-    const doc = migrateDocument(input);
-    let changed = false;
-    const out = [];
-    for (const b of doc.blocks) {
-      if (b && b.type === 'markdown') {
-        // A BREM document loaded into BRE: expand to real blocks.
+  /**
+   * Make a loaded document safe to render. Recursive: unknown types → paragraph,
+   * markdown blocks → real blocks, missing ids/data filled, tables and columns
+   * coerced to their expected shapes. One bad block never blocks the load.
+   */
+  function normalizeBlocks(list, out) {
+    for (const b of list) {
+      if (!b || typeof b !== 'object') continue;
+      if (b.type === 'markdown') {
         const md = (b.data && b.data.markdown) || '';
         for (const nb of markdownToBlocks(md)) out.push(nb);
-        changed = true;
-      } else if (!b || !blockRegistry.has(b.type)) {
-        console.warn(`[bre] setJSON: unknown block type "${b && b.type}" — loaded as text`);
-        const text = b && b.data ? (b.data.text || b.data.html || b.data.markdown || '') : '';
-        out.push(makeBlock('paragraph', { text: String(text) }));
-        changed = true;
-      } else {
-        out.push(b);
+        continue;
       }
+      if (!blockRegistry.has(b.type)) {
+        console.warn(`[bre] setJSON: unknown block type "${b.type}" — loaded as text`);
+        const d = b.data && typeof b.data === 'object' ? b.data : {};
+        out.push(makeBlock('paragraph', { text: String(d.text || d.html || d.markdown || '') }));
+        continue;
+      }
+      let nb = b;
+      if (typeof nb.id !== 'string' || !nb.data || typeof nb.data !== 'object') {
+        nb = { ...nb, id: typeof nb.id === 'string' ? nb.id : generateId(), data: nb.data && typeof nb.data === 'object' ? nb.data : {} };
+      }
+      if (nb.type === 'columns') {
+        const raw = Array.isArray(nb.data.columns) ? nb.data.columns : Array.isArray(nb.data.children) ? nb.data.children : [[], []];
+        let cols = raw.map((c) => { const o = []; normalizeBlocks(Array.isArray(c) ? c : [], o); if (!o.length) o.push(makeBlock('paragraph', { html: '' })); return o; });
+        while (cols.length < 2) cols.push([makeBlock('paragraph', { html: '' })]);
+        if (cols.length > 4) cols = cols.slice(0, 4);
+        nb = { ...nb, data: { columns: cols } };
+      } else if (nb.type === 'table') {
+        const rows = Array.isArray(nb.data.rows) && nb.data.rows.length
+          ? nb.data.rows.map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? '')) : [String(r ?? '')]))
+          : [['', ''], ['', '']];
+        const width = Math.max(...rows.map((r) => r.length), 1);
+        for (const r of rows) while (r.length < width) r.push('');
+        nb = { ...nb, data: { ...nb.data, rows } };
+      }
+      out.push(nb);
     }
-    if (out.length === 0) {
-      out.push(makeBlock('paragraph', { html: '' }));
-      changed = true;
-    }
-    return changed ? { ...doc, blocks: out } : doc;
+  }
+
+  function normalizeDoc(input) {
+    const doc = migrateDocument(input);
+    const out = [];
+    normalizeBlocks(doc.blocks, out);
+    if (out.length === 0) out.push(makeBlock('paragraph', { html: '' }));
+    return { ...doc, blocks: out };
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -1279,6 +1424,12 @@ export function createEditor(container, options = {}) {
     const plugin = blockRegistry.get(block.type);
     html = plugin.toHTML(block, ctx);
     if (!SELF_SAFE.has(block.type)) html = sanitizeHTML(html, { allowKaTeX: true, allowMedia: true });
+    // KaTeX still loading → the plugin returned a plain-text fallback. Don't
+    // cache it (it would stick forever); kick the load so the next call is right.
+    if (html.indexOf('bre-formula-error') !== -1 && !getKaTeX()) {
+      loadKaTeX();
+      return html;
+    }
     htmlCache.set(block, html);
     return html;
   }

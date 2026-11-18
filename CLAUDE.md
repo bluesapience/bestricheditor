@@ -82,7 +82,7 @@ editor.destroy(); // tears down editor and cleans up
 // image:          { src: string, alt?: string, caption?: string }
 // audio:          { src: string, caption?: string }
 // video:          { src: string, caption?: string }
-// columns:        { children: Block[][] }  — 2-col layout, children arrays per column
+// columns:        { columns: Block[][] }   — 2–4 col layout, one array of blocks per column (legacy `children` is also read)
 // markdown:       { markdown: string }     — BREM mode storage
 ```
 

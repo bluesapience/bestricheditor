@@ -144,12 +144,14 @@ export function initDragHandles(root, content, state, renderer, hooks) {
     if (!commit || target === -1) return;
     const from = state.getBlockIndex(id);
     if (from === -1) return;
-    let to = target;
+    // target is an index among RENDERED blocks; offset into the full document
+    // (non-zero when virtualized and scrolled).
+    let to = target + (renderer.firstRenderedIndex ? renderer.firstRenderedIndex() : 0);
     if (to > from) to--;
     if (to === from) return;
     state.saveUndoSnapshot();
     state.moveBlock(from, to);
-    renderer.renderAll(state.getBlocks());
+    renderer.refresh(state.getBlocks());
     hoveredEl = null;
     handle.hidden = true;
     onMove({ blockId: id, from, to });
@@ -172,7 +174,7 @@ export function initDragHandles(root, content, state, renderer, hooks) {
     if (from === -1 || to < 0 || to >= state.getBlocks().length) return;
     state.saveUndoSnapshot();
     state.moveBlock(from, to);
-    renderer.renderAll(state.getBlocks());
+    renderer.refresh(state.getBlocks());
     // Restore focus to the moved block.
     const el = renderer.getBlockEl(id);
     const field = el && el.querySelector('[data-bre-field]');

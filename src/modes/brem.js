@@ -109,7 +109,7 @@ export function createBremEditor(container, options = {}) {
 
   function renderPreview() {
     if (!markdown.trim()) { preview.replaceChildren(); return; } // :empty -> placeholder
-    preview.replaceChildren(sanitizeToFragment(parseMarkdown(markdown), { allowKaTeX: true, allowMedia: true }));
+    preview.replaceChildren(sanitizeToFragment(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), { allowKaTeX: true, allowMedia: true }));
     // KaTeX loads lazily — re-render once it arrives if the text has math.
     if (!getKaTeX() && markdown.includes('$')) {
       const snapshot = markdown;
@@ -273,7 +273,7 @@ export function createBremEditor(container, options = {}) {
   }
 
   function getHTML() {
-    return sanitizeHTML(parseMarkdown(markdown), { allowKaTeX: true, allowMedia: true });
+    return sanitizeHTML(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), { allowKaTeX: true, allowMedia: true });
   }
 
   function setReadOnly(v) {

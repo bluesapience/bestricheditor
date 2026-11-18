@@ -37,6 +37,10 @@
   touch-action: none;
 }
 
+.bre-editor[dir="rtl"] .bre-drag-handle {
+  transform: translateX(100%);
+}
+
 .bre-drag-handle:active {
   cursor: grabbing;
 }

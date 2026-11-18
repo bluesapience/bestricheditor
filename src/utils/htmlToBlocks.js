@@ -6,7 +6,7 @@
  */
 import DOMPurify from 'dompurify';
 import { generateId } from './id.js';
-import { sanitizeURL } from './sanitize.js';
+import { sanitizeURL, FORBIDDEN_TAGS } from './sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
 
 const BLOCK_SELECTOR =
@@ -34,6 +34,7 @@ export function htmlToBlocks(html) {
   const frag = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_ATTR: ['style'],
+    FORBID_TAGS: FORBIDDEN_TAGS,
     RETURN_DOM_FRAGMENT: true,
   });
 

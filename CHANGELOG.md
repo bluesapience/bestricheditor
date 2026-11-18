@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Added
+- **Delete a block**: "Delete table" button, `Ctrl/Cmd+Shift+Backspace` on any block, and Backspace at the start of the block after a divider.
 - **Read-only mode** (`readOnly` option, `setReadOnly()` / `isReadOnly()`) in all three modes.
 - **Placeholder** option for all modes (shown in an empty editor).
 - **Image upload hook** `uploadImage(file) => Promise<string>` for paste, drop and the slash menu / click picker (BRE); URLs are sanitized, failures emit `error`.
@@ -27,6 +28,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- Columns content was silently dropped when a BRE document was loaded into BREW or BREM (data shape `columns` vs `children`); both shapes are now read.
+- `<style>`, `<form>`, `<input>`, `<button>` and friends are stripped from all sanitized content.
+- `getHTML()` no longer caches the plain-text formula fallback while KaTeX is still loading (BRE and BREW).
+- BREW formulas keep their KaTeX markup (SVG, layout styles) on `setJSON`.
+- A user-registered `paste` transform no longer disables the built-in HTML paste.
+- Malformed nested data no longer crashes the load: unknown types inside columns, non-array table rows, missing ids/data are normalized recursively.
+- Drag reorder in virtualized mode dropped blocks at the wrong index and blanked the viewport; moves, undo and keyboard moves now keep the scroll window.
+- Undo/redo: focus stays in the editor after structural undo; no-op key presses no longer push empty undo entries or wipe the redo stack; restored raw HTML is re-sanitized lazily.
+- Inline code mark (`Cmd+/`, `<>` button) now updates the model, fires `change` and is undoable.
+- Cmd+B/I/U no longer apply native formatting in blocks that don't support the mark (and table cells).
+- Slash menu: Enter/Tab with no results closes the menu instead of getting stuck.
+- Enter replaces a selection instead of moving it to the next block; Enter in a list continues the list and an empty item exits it.
+- Custom blocks inside columns persist their data; dropping a non-image file no longer navigates away.
+- `embedAllowlist` is honored by BREM and BREW (preview and `getHTML`); YouTube `/embed/`, `/shorts/`, `/live/`, `m.youtube.com` URLs embed correctly.
+- BREW: typing on an empty first line is wrapped in a paragraph so block-type controls work.
+- `require('bestricheditor')` works: the CommonJS/UMD build is emitted as `dist/bre.umd.cjs` (the package is `"type":"module"`).
+- KaTeX output is passed through the sanitizer before insertion.
+- RTL: drag handle sits on the correct side.
+- The production bundle no longer drops block registration (`sideEffects` flag).
 - **BRE → BREM `setJSON` silently produced an empty document** (data loss). Block documents are now converted to Markdown; BREM/BREW/BRE all accept each other's documents.
 - Multiple editors on a page no longer share one video-embed allowlist (it now flows per instance).
 - Default `getHTML()` no longer strips video embeds and formula markup.

@@ -398,7 +398,8 @@ export function createBrewEditor(container, options = {}) {
         normalizeBlocks(markdownToBlocks((b.data && b.data.markdown) || ''), out);
       } else if (b.type === 'columns') {
         warnOnce('columns', 'BREW flattens columns blocks into a single column');
-        const cols = (b.data && Array.isArray(b.data.children)) ? b.data.children : [];
+        const cols = (b.data && Array.isArray(b.data.columns)) ? b.data.columns
+          : (b.data && Array.isArray(b.data.children)) ? b.data.children : [];
         for (const col of cols) normalizeBlocks(Array.isArray(col) ? col : [], out);
       } else {
         out.push(b);
@@ -1243,8 +1244,32 @@ export function createBrewEditor(container, options = {}) {
         surface.replaceChildren();
       }
     }
+    wrapBareText();
     scheduleChange();
   });
+
+  /**
+   * Browsers type into a bare text node when the surface is empty. Wrap it in a
+   * <p> so block-type controls (heading, list, quote…) have a block to act on.
+   * Moving a node resets ranges inside it, so the caret is restored afterwards.
+   */
+  function wrapBareText() {
+    let changed = false;
+    const sel = window.getSelection();
+    const aNode = sel && sel.anchorNode;
+    const aOff = sel ? sel.anchorOffset : 0;
+    for (const n of Array.from(surface.childNodes)) {
+      if (n.nodeType === 3 && n.nodeValue.trim() !== '') {
+        const p = document.createElement('p');
+        surface.insertBefore(p, n);
+        p.appendChild(n);
+        changed = true;
+      }
+    }
+    if (changed && aNode && aNode.nodeType === 3 && surface.contains(aNode)) {
+      sel.collapse(aNode, Math.min(aOff, aNode.nodeValue.length));
+    }
+  }
 
   // ── Focus / selection events ───────────────────────────────────────────────
 
@@ -1343,7 +1368,7 @@ export function createBrewEditor(container, options = {}) {
     });
     const textOut = sanitizeBatch(textIdx.map(i => plans[i].html));
     textIdx.forEach((i, k) => { plans[i].html = textOut[k]; });
-    const snipOut = sanitizeBatch(snipIdx.map(i => plans[i].snippet), { allowKaTeX: false, allowMedia: true });
+    const snipOut = sanitizeBatch(snipIdx.map(i => plans[i].snippet), { allowKaTeX: true, allowMedia: true });
     snipIdx.forEach((i, k) => { plans[i].snippet = snipOut[k]; });
 
     const frag = document.createDocumentFragment();
@@ -1381,7 +1406,12 @@ export function createBrewEditor(container, options = {}) {
       const want = t === 'bulleted_list' ? 'ul' : t === 'numbered_list' ? 'ol' : null;
       if (open && open !== want) { parts.push(`</${open}>`); open = null; }
       if (want && !open) { parts.push(`<${want}>`); open = want; }
-      if (u.html == null) u.html = blockToHTML(u.block, { trusted: true });
+      if (u.html == null) {
+        const h = blockToHTML(u.block, { trusted: true, embedAllowlist: opts.embedAllowlist });
+        // KaTeX not loaded yet → plain-text fallback: use it now but don't cache it.
+        if (h.indexOf('bre-formula-error') !== -1 && !getKaTeX()) { loadKaTeX(); parts.push(h); continue; }
+        u.html = h;
+      }
       if (u.html) parts.push(u.html);
     }
     if (open) parts.push(`</${open}>`);

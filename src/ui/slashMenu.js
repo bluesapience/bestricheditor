@@ -133,6 +133,10 @@ export function createSlashMenu(onSelect, { messages }) {
     _owner = null;
   }
 
+  function hasResults() {
+    return _filtered.length > 0;
+  }
+
   function isVisible() {
     return !menuEl.hidden;
   }
@@ -174,5 +178,5 @@ export function createSlashMenu(onSelect, { messages }) {
     menuEl.remove();
   }
 
-  return { show, hide, isVisible, filter, next, prev, confirm, destroy };
+  return { show, hide, isVisible, hasResults, filter, next, prev, confirm, destroy };
 }

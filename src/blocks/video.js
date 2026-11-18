@@ -25,15 +25,16 @@ function getEmbedUrl(src, embedAllowlist) {
     );
     if (!allowed) return null;
 
-    // YouTube
-    if (host === 'youtube.com' || host === 'youtu.be') {
+    // YouTube (watch, youtu.be, /embed/, /shorts/, /live/, m.youtube.com)
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
       let id;
       if (host === 'youtu.be') {
-        id = url.pathname.slice(1).split('?')[0];
+        id = url.pathname.slice(1).split('/')[0];
       } else {
-        id = url.searchParams.get('v');
+        const m = /^\/(?:embed|shorts|live|v)\/([\w-]+)/.exec(url.pathname);
+        id = m ? m[1] : url.searchParams.get('v');
       }
-      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+      return id && /^[\w-]+$/.test(id) ? `https://www.youtube-nocookie.com/embed/${id}` : null;
     }
 
     // Vimeo
