@@ -860,7 +860,7 @@ export function createBrewEditor(container, options = {}) {
    * selection), clamped inside the editor. Without this an absolutely positioned
    * dialog sits at the editor's top-left corner.
    */
-  function positionDialog(dialog, anchor, atCorner) {
+  function positionDialog(dialog, anchor, atCorner, spanWidth) {
     const rect = (a) => {
       try { return a && a.getBoundingClientRect ? a.getBoundingClientRect() : null; } catch (_) { return null; }
     };
@@ -868,8 +868,8 @@ export function createBrewEditor(container, options = {}) {
     if (!r || (!r.width && !r.height)) r = rect(toolbar) || rect(surface); // collapsed range etc.
     if (!r) return;
     const rootRect = root.getBoundingClientRect();
-    // atCorner: the dialog spans the block it edits (never narrower than a usable form).
-    if (atCorner) dialog.style.width = Math.min(Math.max(r.width, 280), rootRect.width || r.width) + 'px';
+    // spanWidth: the dialog spans the block it edits (never narrower than a usable form).
+    if (spanWidth) dialog.style.width = Math.min(Math.max(r.width, 280), rootRect.width || r.width) + 'px';
     // atCorner: dialog's top-left sits on the anchor's top-left; otherwise just below it.
     const top = atCorner ? r.top - rootRect.top : r.bottom - rootRect.top + 6;
     const maxLeft = Math.max(0, rootRect.width - (dialog.offsetWidth || 0));
@@ -878,7 +878,7 @@ export function createBrewEditor(container, options = {}) {
     dialog.style.left = left + 'px';
   }
 
-  function openDialog({ className, label, fields, savedRange, anchor, atCorner, validate, onSave, onRemove }) {
+  function openDialog({ className, label, fields, savedRange, anchor, atCorner, spanWidth, validate, onSave, onRemove }) {
     if (activeDialog) activeDialog.close(false);
 
     const dialog = document.createElement('div');
@@ -955,7 +955,7 @@ export function createBrewEditor(container, options = {}) {
     });
 
     root.appendChild(dialog);
-    positionDialog(dialog, anchor || savedRange, atCorner);
+    positionDialog(dialog, anchor || savedRange, atCorner, spanWidth);
     // Deferred: the mousedown that opened the dialog is still bubbling.
     outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
     activeDialog = { dialog, close };
@@ -993,6 +993,7 @@ export function createBrewEditor(container, options = {}) {
     openDialog({
       anchor,
       atCorner: !!anchor,
+      spanWidth: !!anchor,
       className: 'bre-brew-link-dialog bre-brew-media-dialog',
       label: messages.mediaDialog,
       savedRange,
@@ -1395,9 +1396,10 @@ export function createBrewEditor(container, options = {}) {
         });
       },
       onRemove: () => removeBlockEl(formulaEl),
-      // Span the formula's whole block (an inline formula is only a few px wide).
+      // Just below the formula's line, spanning that whole block (an inline
+      // formula is only a few px wide).
       anchor: topLevelBlockOf(formulaEl),
-      atCorner: true,
+      spanWidth: true,
     });
   }
 

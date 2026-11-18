@@ -459,7 +459,7 @@ test('BREW: media controls float on the top-left while selected/hovered (CSS con
   assert.match(css, /\.bre-media-controls\s*\{\s*display:\s*none/);
 });
 
-test('BREW: formula dialog spans its block (top-left corner, block width)', () => {
+test('BREW: formula dialog sits just below its line and spans the block width', () => {
   const host = mount();
   const ed = createEditor(host, { mode: 'BREW' });
   ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x^2', displayMode: true } }]));
@@ -472,7 +472,7 @@ test('BREW: formula dialog spans its block (top-left corner, block width)', () =
   const dlg = host.querySelector('.bre-brew-link-dialog');
   assert.ok(dlg);
   assert.equal(dlg.style.width, '800px', 'block width, not the tiny formula width');
-  assert.equal(dlg.style.top, '60px');
+  assert.equal(dlg.style.top, '106px', 'just below the line: block bottom 200 - root top 100 + 6');
   assert.equal(dlg.style.left, '0px');
   ed.destroy();
 });
