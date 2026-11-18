@@ -14,7 +14,7 @@ Full spec: `ABOUT.md`
 - No UI frameworks
 - Minimal dependencies — DOMPurify and KaTeX are the only allowed runtime deps
 - Build tool: **Rollup**
-- Styling: **plain CSS with CSS variables**
+- Styling: **structural CSS only — no visual styling.** No colors, fonts, sizes, spacing, radii, shadows or theme variables; everything inherits from the host page. Only functional rules (positioning, layout, visibility, placeholders) belong in `src/bre.css`.
 - HTML sanitization: **DOMPurify** on all HTML output and pasted HTML — never raw `innerHTML`
 - Math rendering: **KaTeX** for inline (`$...$`) and block (`$$...$$`) formulas
 
@@ -82,7 +82,7 @@ editor.destroy(); // tears down editor and cleans up
 // image:          { src: string, alt?: string, caption?: string }
 // audio:          { src: string, caption?: string }
 // video:          { src: string, caption?: string }
-// columns:        { children: Block[][] }  — 2-col layout, children arrays per column
+// columns:        { columns: Block[][] }   — 2–4 col layout, one array of blocks per column (legacy `children` is also read)
 // markdown:       { markdown: string }     — BREM mode storage
 ```
 

@@ -513,7 +513,7 @@ if (card) {
     const doc = { id: 'perf-doc', version: 1, created: Date.now(), updated: Date.now(), blocks };
 
     // Test 1: non-virtual
-    editor = createEditor(container, { mode: 'BRE' });
+    editor = createEditor(container, { mode: 'BRE', virtualize: false });
     const t0 = performance.now();
     editor.setJSON(doc);
     const nonVirtTime = performance.now() - t0;

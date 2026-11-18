@@ -3,10 +3,12 @@
  * data: { rows: string[][] }
  */
 import { blockRegistry } from '../core/blockRegistry.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 import { escapeHTML } from '../utils/dom.js';
 
 blockRegistry.register('table', {
-  render(block) {
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
     const rows =
       block.data && Array.isArray(block.data.rows) && block.data.rows.length > 0
         ? block.data.rows
@@ -30,7 +32,7 @@ blockRegistry.register('table', {
         cellEl.setAttribute('contenteditable', 'true');
         cellEl.setAttribute('data-bre-table-row', String(rowIndex));
         cellEl.setAttribute('data-bre-table-col', String(colIndex));
-        cellEl.setAttribute('data-bre-placeholder', rowIndex === 0 ? 'Header' : 'Cell');
+        cellEl.setAttribute('data-bre-placeholder', rowIndex === 0 ? m.tableHeader : m.tableCell);
         cellEl.textContent = String(cell);
         tr.appendChild(cellEl);
       });
@@ -48,10 +50,11 @@ blockRegistry.register('table', {
     controls.className = 'bre-table-controls';
 
     [
-      { action: 'add-row', label: '+ Row' },
-      { action: 'del-row', label: '− Row' },
-      { action: 'add-col', label: '+ Col' },
-      { action: 'del-col', label: '− Col' },
+      { action: 'add-row', label: m.addRow },
+      { action: 'del-row', label: m.delRow },
+      { action: 'add-col', label: m.addCol },
+      { action: 'del-col', label: m.delCol },
+      { action: 'del-block', label: m.delTable },
     ].forEach(({ action, label }) => {
       const btn = document.createElement('button');
       btn.type = 'button';

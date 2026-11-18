@@ -4,21 +4,28 @@
 import { katexReady, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { elt, escapeHTML } from '../utils/dom.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { sanitizeToFragment } from '../utils/sanitize.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 
-ensureKaTeXStyles();
+
 
 function renderLatexInto(wrapper, latex, displayMode) {
   const katex = getKaTeX();
   if (!katex) return;
   try {
-    wrapper.innerHTML = katex.renderToString(latex, { displayMode, throwOnError: false, output: 'html' });
+    // Sanitize KaTeX output too (project rule: no unsanitized innerHTML).
+    wrapper.replaceChildren(sanitizeToFragment(
+      katex.renderToString(latex, { displayMode, throwOnError: false, output: 'html' }),
+      { allowKaTeX: true },
+    ));
   } catch {
     wrapper.textContent = latex;
   }
 }
 
 blockRegistry.register('formula', {
-  render(block) {
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
     const latex = (block.data && block.data.latex) || '';
     const displayMode = block.data && block.data.displayMode != null ? block.data.displayMode : true;
 
@@ -31,7 +38,7 @@ blockRegistry.register('formula', {
     wrapper.dataset.breLatex = latex;
 
     if (!latex) {
-      wrapper.appendChild(elt('span', { class: 'bre-formula-placeholder' }, 'Click to add formula…'));
+      wrapper.appendChild(elt('span', { class: 'bre-formula-placeholder' }, m.formulaEmpty));
       return wrapper;
     }
 

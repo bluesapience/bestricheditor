@@ -18,41 +18,12 @@
  *
  * Usage: createVirtualRenderer(container, state)
  */
-import { blockRegistry } from './blockRegistry.js';
+import { createBlockEl, registerSubBlocks as registerSubs } from './blockEl.js';
 
 const OVERSCAN = 30;
 const DEFAULT_BLOCK_HEIGHT = 56; // px estimate for unrendered blocks
 
-const DRAG_HANDLE_SVG = `<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <circle cx="3" cy="2" r="1.5"/>
-  <circle cx="7" cy="2" r="1.5"/>
-  <circle cx="3" cy="6" r="1.5"/>
-  <circle cx="7" cy="6" r="1.5"/>
-  <circle cx="3" cy="10" r="1.5"/>
-  <circle cx="7" cy="10" r="1.5"/>
-  <circle cx="3" cy="14" r="1.5"/>
-  <circle cx="7" cy="14" r="1.5"/>
-</svg>`;
-
-function createDragHandle() {
-  const handle = document.createElement('div');
-  handle.className = 'bre-drag-handle';
-  handle.setAttribute('data-bre-handle', '');
-  handle.setAttribute('aria-hidden', 'true');
-  handle.innerHTML = DRAG_HANDLE_SVG;
-  return handle;
-}
-
-function createBlockWrapper(block, contentEl) {
-  const wrapper = document.createElement('div');
-  wrapper.className = `bre-block bre-block--${block.type}`;
-  wrapper.setAttribute('data-bre-block-id', block.id);
-  wrapper.appendChild(createDragHandle());
-  wrapper.appendChild(contentEl);
-  return wrapper;
-}
-
-export function createVirtualRenderer(container, state) {
+export function createVirtualRenderer(container, state, ctx) {
   /** @type {Map<string, Element>} blockId → DOM element (visible blocks only) */
   const blockMap = new Map();
 
@@ -65,6 +36,7 @@ export function createVirtualRenderer(container, state) {
   let visibleStart = 0;
   let visibleEnd = -1;
   let rafPending = false;
+  let destroyed = false;
 
   // Cached layout values — refreshed once at attach time and on resize.
   let scrollParent = null;
@@ -159,21 +131,12 @@ export function createVirtualRenderer(container, state) {
   }
 
   function renderBlockEl(block) {
-    const plugin = blockRegistry.get(block.type);
-    const contentEl = plugin.render(block);
-    return createBlockWrapper(block, contentEl);
+    return createBlockEl(block, ctx);
   }
 
   function registerSubBlocks(columnsBlock) {
-    const cols = columnsBlock.data && columnsBlock.data.columns;
-    if (!Array.isArray(cols)) return;
-    for (const col of cols) {
-      if (!Array.isArray(col)) continue;
-      for (const subBlock of col) {
-        const el = container.querySelector(`[data-bre-block-id="${subBlock.id}"]`);
-        if (el) blockMap.set(subBlock.id, el);
-      }
-    }
+    const el = blockMap.get(columnsBlock.id);
+    if (el) registerSubs(blockMap, el);
   }
 
   // ── Window calculation (O(log n) binary search) ───────────────────────────
@@ -277,7 +240,7 @@ export function createVirtualRenderer(container, state) {
     rafPending = true;
     requestAnimationFrame(() => {
       rafPending = false;
-      if (blocks.length === 0) return;
+      if (destroyed || !scrollParent || blocks.length === 0) return;
       const { newStart, newEnd } = calcVisibleWindow();
       reconcile(newStart, newEnd);
     });
@@ -325,7 +288,7 @@ export function createVirtualRenderer(container, state) {
     blockMap.clear();
     heightCache.clear();
     invalidatePrefix();
-    container.innerHTML = '';
+    container.textContent = '';
     container.appendChild(topSpacer);
     container.appendChild(bottomSpacer);
 
@@ -358,8 +321,54 @@ export function createVirtualRenderer(container, state) {
 
     // Measure actual heights after first paint — corrects spacer estimates.
     requestAnimationFrame(() => {
-      if (blocks.length > 0) measureVisibleAndUpdateSpacers();
+      if (!destroyed && scrollParent && blocks.length > 0) measureVisibleAndUpdateSpacers();
     });
+  }
+
+  /**
+   * Re-render after a structural change (drag move, undo, keyboard move) WITHOUT
+   * resetting scroll position: keep the current window and cached heights.
+   */
+  function refresh(newBlocks) {
+    const oldStart = visibleStart;
+    blocks = newBlocks;
+    prevBlockCount = blocks.length;
+    blockMap.clear();
+    invalidatePrefix();
+    container.textContent = '';
+    container.appendChild(topSpacer);
+    container.appendChild(bottomSpacer);
+    if (blocks.length === 0) {
+      visibleStart = 0;
+      visibleEnd = -1;
+      updateSpacers();
+      return;
+    }
+    let start = Math.min(oldStart, blocks.length - 1);
+    // Re-derive from the real scroll position when we can (cheap, cached offsets).
+    if (scrollParent) {
+      const w = calcVisibleWindow();
+      start = w.newStart;
+      visibleStart = start;
+      visibleEnd = w.newEnd;
+    } else {
+      visibleStart = start;
+      visibleEnd = Math.min(blocks.length - 1, start + OVERSCAN * 2);
+    }
+    const frag = document.createDocumentFragment();
+    for (let i = visibleStart; i <= visibleEnd; i++) {
+      const el = renderBlockEl(blocks[i]);
+      blockMap.set(blocks[i].id, el);
+      frag.appendChild(el);
+      if (blocks[i].type === 'columns') registerSubBlocks(blocks[i]);
+    }
+    container.insertBefore(frag, bottomSpacer);
+    updateSpacers();
+  }
+
+  /** Index (in the full document) of the first block currently in the DOM. */
+  function firstRenderedIndex() {
+    return visibleStart;
   }
 
   function updateBlock(block) {
@@ -412,8 +421,12 @@ export function createVirtualRenderer(container, state) {
   }
 
   function destroy() {
+    destroyed = true;
     detachScroll();
     unsubscribe();
+    blockMap.clear();
+    heightCache.clear();
+    container.textContent = '';
   }
 
   return {
@@ -423,6 +436,8 @@ export function createVirtualRenderer(container, state) {
     removeBlock,
     getBlockEl,
     registerSubBlocks,
+    refresh,
+    firstRenderedIndex,
     destroy,
   };
 }

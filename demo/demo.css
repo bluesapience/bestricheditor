@@ -53,9 +53,31 @@ body {
   overflow: hidden;
 }
 
-/* Give the editor padding so content isn't flush to the card edge.
-   Left is wider than right to leave room for the drag handles (which sit
-   at -28px from the block) while keeping them inside the card's overflow:hidden. */
+/* ── The demo page is the HOST: it styles the editor, the library does not. ──
+   Everything below is ordinary page CSS targeting the editor's .bre-* classes. */
+
 #bre-demo {
-  --bre-editor-padding: 20px 32px 32px 44px;
+  padding: 20px 32px 32px 44px; /* left gutter leaves room for the drag handle */
+  font-size: 16px;
+  line-height: 1.6;
 }
+
+#bre-demo .bre-heading { line-height: 1.3; }
+#bre-demo .bre-quote { margin: 0; padding: 4px 16px; border-left: 3px solid #3b82f6; color: #4b5563; }
+#bre-demo .bre-code-wrapper { background: #1e1e2e; color: #cdd6f4; border-radius: 6px; padding: 8px 12px; }
+#bre-demo .bre-code { margin: 0; overflow-x: auto; }
+#bre-demo .bre-column { padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 6px; margin: 0 4px; }
+#bre-demo .bre-table th, #bre-demo .bre-table td { border-color: #e5e7eb; padding: 6px 10px; }
+#bre-demo .bre-slash-menu, #bre-demo .bre-inline-toolbar { border-color: #e5e7eb; }
+.bre-slash-menu { border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 240px; }
+.bre-slash-item { padding: 6px 10px; }
+.bre-slash-item__icon { font-family: monospace; min-width: 2.5em; text-align: center; }
+.bre-slash-item__desc { opacity: .6; font-size: .85em; }
+.bre-inline-toolbar { border-radius: 6px; padding: 2px; }
+.bre-inline-toolbar-btn { border: 0; background: none; width: 28px; height: 28px; }
+.bre-drag-handle { opacity: .4; padding-right: 6px; }
+.bre-brew-toolbar { gap: 4px; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
+.bre-brew-btn, .bre-brew-block-type { border: 1px solid transparent; background: none; padding: 4px 8px; }
+.bre-brew-surface { min-height: 400px; outline: none; }
+.bre-brem-textarea { min-height: 300px; outline: none; font-family: monospace; }
+.bre-brem-toggle { margin: 8px; padding: 2px 10px; }

@@ -12,6 +12,7 @@ Most rich text editors force you to pick one paradigm and stick with it. Best Ri
 
 - **Zero framework dependencies** — works with React, Vue, Svelte, Angular, or plain HTML
 - **Two runtime deps** — [DOMPurify](https://github.com/cure53/DOMPurify) (XSS sanitization) + [KaTeX](https://katex.org/) (math, loaded lazily)
+- **No visual opinions** — structural CSS only; inherits font/color/background from your app
 - **14 block types** — headings, lists, quotes, code, tables, images, audio, video, KaTeX formulas, multi-column layouts
 - **Fully serializable** — `getJSON()` / `setJSON()` / `getHTML()` / `setHTML()` on every mode
 - **Safe by default** — all HTML output sanitized via DOMPurify; URL injection prevented
@@ -24,33 +25,49 @@ Most rich text editors force you to pick one paradigm and stick with it. Best Ri
 npm install bestricheditor
 ```
 
-### CSS requirements
+### CSS
 
-The editor needs **two stylesheets**:
-
-| Stylesheet | What it covers | How it loads |
+| Stylesheet | What it covers | How to load |
 |---|---|---|
-| `dist/bre.css` | Editor layout, blocks, toolbar | You import it (ESM) or it auto-injects (UMD) |
-| KaTeX CSS | Math formula rendering | Auto-injected from jsDelivr CDN by the library |
-
-**ESM build** — import the editor stylesheet yourself:
+| `bestricheditor/dist/bre.css` | Structural editor CSS (layout, blocks, toolbar) | `import` it (ESM); auto-injected by the UMD build |
+| `bestricheditor/katex.css` | KaTeX styles + fonts (only needed if you render formulas) | `import 'bestricheditor/katex.css'` |
 
 ```js
 import { createEditor } from 'bestricheditor';
 import 'bestricheditor/dist/bre.css';
-// KaTeX CSS is injected automatically from CDN when the editor mounts.
+import 'bestricheditor/katex.css'; // optional: formulas only
 ```
 
-**UMD build** (`dist/bre.umd.js`) — both stylesheets are handled automatically; no imports needed.
+**No stylesheet is ever fetched from a CDN by default.** If you prefer to host the KaTeX stylesheet yourself (or serve it from a CDN you control), pass `katexCssUrl` and the editor injects a `<link>` for it once:
 
-**Self-hosting KaTeX CSS** — to avoid the CDN fetch (offline apps, strict CSP), load your own copy before the editor:
+```js
+createEditor(el, { katexCssUrl: '/vendor/katex.min.css' });
+```
+
+### ESM and bundlers
+
+The ESM build (`dist/bre.esm.js`) keeps `dompurify` and `katex` **external** (they are regular `dependencies`), so your bundler dedupes them. KaTeX is loaded with a dynamic `import('katex')`, so bundlers split it into its own lazy chunk automatically.
+
+### Script tag / CDN (UMD)
 
 ```html
-<!-- Must have id="bre-katex-css" so the library skips its auto-inject -->
-<link id="bre-katex-css" rel="stylesheet" href="/vendor/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/bestricheditor/dist/bre.umd.js"></script>
+<script>
+  const editor = bre.createEditor(document.getElementById('editor'));
+</script>
 ```
 
-> **Note for direct ESM users (no bundler):** The ESM build code-splits KaTeX into `dist/chunks/`. Make sure your server also serves that directory so the lazy chunk can load.
+The UMD core bundles DOMPurify but **not** KaTeX. On load it fetches `bre.katex.umd.js` from the same directory as `bre.umd.js` (resolved from its own script URL). To customise:
+
+```html
+<script>
+  window.BRE_KATEX_URL = '/static/bre.katex.umd.js'; // self-host elsewhere
+  // window.BRE_KATEX_URL = false;                   // opt out: no KaTeX, formulas stay as source text
+</script>
+<script src="bre.umd.js"></script>
+```
+
+(`window.BRE_KATEX_URL` must be set before `bre.umd.js` runs.) Add a CSP allowance for the KaTeX script origin accordingly.
 
 ---
 
@@ -103,33 +120,80 @@ Toolbar includes: paragraph/heading selector, bold/italic/underline, bulleted li
 
 ```js
 createEditor(container, {
-  mode: 'BRE',                              // 'BRE' | 'BREM' | 'BREW'
-  onChange: (doc) => {},                    // debounced callback on every change
+  mode: 'BRE',                  // 'BRE' | 'BREM' | 'BREW'
+  onChange: (doc) => {},        // debounced
+  onReady: () => {},
+  onFocus: () => {},
+  onBlur: () => {},
+  onSelectionChange: () => {},
   embedAllowlist: ['youtube.com', 'youtu.be', 'vimeo.com'],
-  virtualize: false,                        // true = render only visible blocks
+  virtualize: 'auto',           // 'auto' | true | false
+  readOnly: false,
+  placeholder: 'Type / for commands',
+  uploadImage: async (file) => url,
+  katexCssUrl: '/vendor/katex.min.css',
+  messages: { /* UI string overrides */ },
+  dir: 'auto',                  // 'ltr' | 'rtl' | 'auto'
 });
 ```
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `mode` | `string` | `'BRE'` | Editor mode |
-| `onChange` | `function` | `null` | Debounced callback receiving the current document |
+| `mode` | `'BRE' \| 'BREM' \| 'BREW'` | `'BRE'` | Editor mode |
+| `onChange` | `(doc) => void` | - | Debounced callback receiving the current document |
+| `onReady` / `onFocus` / `onBlur` / `onSelectionChange` | `() => void` | - | Lifecycle callbacks (same as the matching events) |
 | `embedAllowlist` | `string[]` | `['youtube.com','youtu.be','vimeo.com']` | Domains allowed as iframe embeds |
-| `virtualize` | `boolean` | `false` | Virtualized rendering for large documents |
+| `virtualize` | `'auto' \| boolean` | `'auto'` | Virtualized rendering for large documents (BRE) |
+| `readOnly` | `boolean` | `false` | Render without editing affordances |
+| `placeholder` | `string` | - | Placeholder text for empty content |
+| `uploadImage` | `(file: File) => Promise<string>` | - | Called for pasted/dropped/picked images; resolve with the final URL |
+| `katexCssUrl` | `string` | - | Opt-in: inject this KaTeX stylesheet URL (nothing is injected otherwise) |
+| `messages` | `Partial<Record<string,string>>` | built-in English | Override UI strings |
+| `dir` | `'ltr' \| 'rtl' \| 'auto'` | - | Text direction |
+
+TypeScript definitions ship in `types/index.d.ts`.
 
 ---
 
 ## API
 
-All three modes expose the same five methods:
+All modes expose the same methods:
 
 ```js
-editor.getJSON()        // → Document object
-editor.setJSON(doc)     // loads a Document object
-editor.getHTML()        // → sanitized HTML string
-editor.setHTML(html)    // parse an HTML string and load it as blocks
-editor.destroy()        // removes DOM, cleans up listeners
+editor.getJSON()          // -> Document
+editor.setJSON(doc)       // load a Document
+editor.getHTML()          // -> sanitized HTML string
+editor.setHTML(html)      // parse HTML and load it as blocks
+editor.destroy()          // remove DOM, clean up listeners
+
+editor.setReadOnly(true)  // toggle read-only at runtime
+editor.isReadOnly()
+editor.focus()
+editor.blur()
+editor.isEmpty()
+
+const off = editor.on('change', (doc) => {});   // returns an unsubscribe function
+editor.off('change', handler);
 ```
+
+Events: `ready`, `change`, `focus`, `blur`, `selectionchange`.
+
+### Custom blocks
+
+```js
+import { registerBlock } from 'bestricheditor';   // global; editor.registerBlock(def) is per instance
+
+registerBlock({
+  type: 'callout',
+  render(data, ctx) { const el = document.createElement('div'); el.className = 'my-callout'; el.textContent = data.text ?? ''; return el; },
+  serialize(el) { return { text: el.textContent ?? '' }; },
+  toHTML(data) { return '<div class="my-callout">' + escapeHtml(String(data.text ?? '')) + '</div>'; },
+  fromHTML(el) { return el.classList.contains('my-callout') ? { text: el.textContent ?? '' } : null; },
+  slashMenu: { label: 'Callout', icon: '!', description: 'Highlighted note', keywords: ['note', 'info'] },
+});
+```
+
+`toHTML` output is sanitized with DOMPurify before it is returned from `getHTML()`.
 
 ---
 
@@ -199,13 +263,16 @@ editor.setJSON(doc);
 | Feature | Detail |
 |---|---|
 | Slash menu | Press `/` to open a searchable block inserter |
-| Drag reorder | Drag the handle on the left of any block |
+| Drag reorder | Drag the handle (`⋮⋮`) on the left of any block. Keyboard: `Alt+Shift+↑` / `↓` |
+| Block menu | **Click** the handle (without dragging) or press `Alt+Shift+M`: Replace (media), Duplicate, Delete |
+| Select media / divider | Click a loaded image, audio, video or divider to select it (outline, `data-bre-selected`); `Backspace` / `Delete` removes it, `Esc` deselects, `↑` / `↓` moves to the neighbouring block. Double-click media to replace its source |
+| Delete a block | Select it and press `Delete`, use the block menu, or `⌘⇧⌫` / `Ctrl+Shift+Backspace` from anywhere inside it. Tables also have a **Delete table** button. All undoable |
 | Inline toolbar | Select text → floating toolbar appears with Bold, Italic, Underline, Code, Link buttons |
 | Keyboard splitting | `Enter` splits a block; `Backspace` at start merges |
 | Arrow navigation | `↑` / `↓` moves between blocks |
 | Undo / redo | `⌘Z` / `Ctrl+Z` and `⌘⇧Z` / `Ctrl+Shift+Z` |
 | Multi-column layout | Insert a **Columns** block (2, 3, or 4 columns); stacks on mobile |
-| Virtualized rendering | Pass `{ virtualize: true }` for 500+ block documents |
+| Virtualized rendering | `virtualize: 'auto'` (default) for large documents; `true` / `false` to force |
 
 ## BRE — Inline formatting keyboard shortcuts
 
@@ -223,6 +290,16 @@ Buttons shown in the floating toolbar are context-aware — only the marks suppo
 
 ---
 
+## BREW — selecting and deleting blocks
+
+| Action | How |
+|---|---|
+| Select an image / audio / video / divider | Click it (outline, `data-bre-selected`) |
+| Delete it | `Backspace` / `Delete` (undoable with `⌘Z`); `Esc` deselects |
+| Edit media source, alt, caption | `Enter` on the selected block, or double-click; the dialog also has **Remove** |
+| Delete a table | **Delete table** button in the table controls |
+| Edit / remove a formula | Click it → dialog with **Remove** |
+
 ## BREW — WYSIWYG keyboard shortcuts
 
 | Shortcut | Action |
@@ -237,11 +314,11 @@ Buttons shown in the floating toolbar are context-aware — only the marks suppo
 
 ## Math (KaTeX)
 
-Supported in all three modes. KaTeX JS is loaded as a lazy chunk; KaTeX CSS is auto-injected from jsDelivr CDN. Neither blocks the initial page render. See [Installation](#installation) if you need to self-host the CSS.
+Supported in all three modes. KaTeX JS is always loaded lazily (dynamic `import('katex')` in ESM, `bre.katex.umd.js` in the UMD build). KaTeX CSS is **not** injected by default: import `bestricheditor/katex.css` or pass `katexCssUrl` (see [CSS](#css)).
 
-**BRE / BREW** — use the **∑ Formula** button, or supply a `formula` block via `setJSON`.
+**BRE / BREW**: use the **Formula** button, or supply a `formula` block via `setJSON`.
 
-**BREM** — write `$inline$` or `$$display$$` in the textarea.
+**BREM**: write `$inline$` or `$$display$$` in the textarea.
 
 ```js
 { type: 'formula', data: { latex: '\\int_0^\\infty e^{-x}\\,dx = 1', displayMode: true } }
@@ -265,7 +342,7 @@ Other video URLs render as a native `<video>` element. Extend the allowlist with
 For documents with hundreds of blocks:
 
 ```js
-const editor = createEditor(container, { mode: 'BRE', virtualize: true });
+const editor = createEditor(container, { mode: 'BRE', virtualize: true }); // or 'auto' (default)
 ```
 
 Only blocks visible in the viewport (± 30 blocks) are in the DOM. A prefix-sum array gives O(log n) window lookups and O(1) spacer height calculations.
@@ -280,50 +357,40 @@ Only blocks visible in the viewport (± 30 blocks) are in the DOM. A prefix-sum 
 
 ## Bundle size
 
-| Artifact | Raw | Gzip |
-|---|---|---|
-| `dist/bre.esm.js` (initial) | 244 kb | **55 kb** |
-| `dist/chunks/katex-*.js` (lazy) | 597 kb | 145 kb |
-| `dist/bre.umd.js` (all-in-one) | 887 kb | 206 kb |
-| `dist/bre.css` | 15 kb | 3 kb |
+Measured on this repo's production build (minified, gzip level 9; see `npm run size`):
 
-The ESM build code-splits KaTeX into a separate chunk that loads in parallel and is only fetched when needed. Consumers using Vite or webpack get further automatic splitting on top of this. The UMD build bundles everything for script-tag usage.
+| Artifact | Raw | Min + gzip |
+|---|---|---|
+| `dist/bre.esm.js` (DOMPurify + KaTeX external) | 70.4 kB | **18.9 kB** |
+| `dist/bre.umd.js` (core + bundled DOMPurify, no KaTeX) | 108.6 kB | **30.5 kB** |
+| `dist/bre.katex.umd.js` (lazy, UMD only) | 252.6 kB | **76.0 kB** |
+| `dist/bre.css` | 14.6 kB | 3.1 kB |
+| `dist/katex.css` (+ 20 woff2 fonts, ~296 kB total) | 21.1 kB | 3.3 kB |
+
+Sourcemaps (`*.map`) are published alongside every JS file. `npm run size` enforces limits (ESM 32 kB, UMD core 45 kB, KaTeX 80 kB).
 
 ---
 
 ## Styling
 
-The editor has no default outer padding — it fills whatever container you mount it in. Use CSS custom properties to theme it:
+The library ships **no visual styling opinions**. `bre.css` contains structural CSS only (layout, positioning, hit areas) and every block inherits font, color and background from the host page. There are no theme variables: style the editor with ordinary CSS selectors on the `.bre-*` classes.
 
 ```css
-:root {
-  --bre-color-bg:          #ffffff;
-  --bre-color-surface:     #f9fafb;
-  --bre-color-text:        #111827;
-  --bre-color-text-muted:  #6b7280;
-  --bre-color-border:      #e5e7eb;
-  --bre-color-accent:      #3b82f6;
-  --bre-color-placeholder: #9ca3af;
-  --bre-color-code-bg:     #1e1e2e;
-  --bre-color-code-text:   #cdd6f4;
-  --bre-color-quote-border:#3b82f6;
-  --bre-font-sans:         inherit;              /* inherits host app font by default */
-  --bre-font-mono:         'SFMono-Regular', Consolas, monospace;
-  --bre-radius:            6px;
-  --bre-editor-max-width:  720px;
-  --bre-editor-padding:    0;
-}
+.my-editor-wrapper .bre-editor { font-family: Georgia, serif; color: #222; }
+.my-editor-wrapper .bre-block--quote { border-left: 3px solid rebeccapurple; }
 ```
 
-To add padding around the editor, either set `--bre-editor-padding` or add padding/margin to the container element:
+Inspect the rendered DOM to find the class for a given element. Add padding or a max width on your own container.
 
-```css
-/* Option A — CSS variable */
-.my-editor-wrapper { --bre-editor-padding: 24px 32px; }
+---
 
-/* Option B — container padding */
-.my-editor-wrapper { padding: 24px 32px; }
-```
+## Content Security Policy
+
+- No `eval()` / `new Function`.
+- No external requests by default (no CDN stylesheet, no web fonts). With ESM + `katex.css`, everything is served from your own origin. KaTeX fonts are `font-src` resources.
+- `katexCssUrl` and (UMD) `BRE_KATEX_URL` are opt-in; allow those origins in `style-src` / `script-src` if you use them.
+- The UMD core injects its CSS through a `<style>` element, so it needs `style-src 'unsafe-inline'` (or a nonce-based setup); prefer the ESM build with the extracted `bre.css` under a strict CSP.
+- Video embeds render sandboxed iframes limited to `embedAllowlist`; add those origins to `frame-src`.
 
 ---
 

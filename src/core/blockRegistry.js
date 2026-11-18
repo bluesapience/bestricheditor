@@ -1,16 +1,19 @@
 /**
  * Block type registry for Best Rich Editor.
  * Plugins register themselves here; the editor and renderer look them up by type.
+ *
+ * Plugin interface (internal):
+ *   render(block, ctx) -> HTMLElement
+ *   toHTML(block, ctx) -> string
+ *   validate(block)    -> boolean
+ *   capabilities?      -> { inline, marks, links }
  */
 
 const _registry = new Map();
+/** @type {Map<string, object>} custom (user-registered) block definitions */
+const _customs = new Map();
 
 export const blockRegistry = {
-  /**
-   * Register a block type plugin.
-   * @param {string} type - Block type identifier (e.g. 'paragraph')
-   * @param {object} plugin - Plugin object with render, toHTML, validate methods
-   */
   register(type, plugin) {
     if (_registry.has(type)) {
       console.warn(`[bre] blockRegistry: overwriting existing type "${type}"`);
@@ -18,9 +21,11 @@ export const blockRegistry = {
     _registry.set(type, plugin);
   },
 
-  /**
-   * Get a plugin by type. Throws if not found.
-   */
+  /** Register without the overwrite warning (intentional re-registration). */
+  registerSilent(type, plugin) {
+    _registry.set(type, plugin);
+  },
+
   get(type) {
     const plugin = _registry.get(type);
     if (!plugin) {
@@ -29,35 +34,67 @@ export const blockRegistry = {
     return plugin;
   },
 
-  /**
-   * Check if a type is registered.
-   */
   has(type) {
     return _registry.has(type);
   },
 
-  /**
-   * Return all registered [type, plugin] pairs.
-   */
   all() {
     return Array.from(_registry.entries());
   },
 
-  /**
-   * Register a block type plugin without the overwrite warning.
-   * Use for intentional re-registration (e.g. video with a per-instance allowlist).
-   */
-  registerSilent(type, plugin) {
-    _registry.set(type, plugin);
-  },
-
-  /**
-   * Return the capabilities of a registered block type.
-   * Falls back to a safe default if the plugin has no capabilities defined.
-   */
   getCapabilities(type) {
     const plugin = _registry.get(type);
     if (plugin && plugin.capabilities) return plugin.capabilities;
     return { inline: false, marks: [], links: false };
+  },
+
+  /**
+   * Register a public custom block.
+   *
+   * def: {
+   *   type, render(data, ctx) -> Element, serialize?(el) -> data,
+   *   toHTML(data) -> string, fromHTML?(el) -> data | null, validate?(data),
+   *   slashMenu?: { label, icon?, description?, keywords? }, defaultData?, capabilities?
+   * }
+   * ctx given to render: { blockId, readOnly, messages, update(data) }
+   */
+  registerCustom(def) {
+    if (!def || typeof def.type !== 'string' || !def.type) {
+      throw new Error('[bre] registerBlock: "type" is required');
+    }
+    if (typeof def.render !== 'function' || typeof def.toHTML !== 'function') {
+      throw new Error('[bre] registerBlock: "render" and "toHTML" are required');
+    }
+    if (_registry.has(def.type) && !_customs.has(def.type)) {
+      throw new Error(`[bre] registerBlock: "${def.type}" is a built-in block type`);
+    }
+    const plugin = {
+      custom: true,
+      def,
+      render(block, ctx) {
+        const el = def.render(block.data || {}, {
+          blockId: block.id,
+          readOnly: ctx.isReadOnly(),
+          messages: ctx.messages,
+          update: (data) => ctx.updateBlockData(block.id, data),
+        });
+        el.setAttribute('data-bre-custom', def.type);
+        return el;
+      },
+      toHTML(block) {
+        return def.toHTML(block.data || {});
+      },
+      validate(block) {
+        return def.validate ? !!def.validate(block.data || {}) : true;
+      },
+      capabilities: def.capabilities || { inline: false, marks: [], links: false },
+    };
+    _registry.set(def.type, plugin);
+    _customs.set(def.type, plugin);
+    return plugin;
+  },
+
+  customs() {
+    return Array.from(_customs.values());
   },
 };

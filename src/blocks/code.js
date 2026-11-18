@@ -2,10 +2,12 @@
  * Code block plugin.
  */
 import { blockRegistry } from '../core/blockRegistry.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 import { escapeHTML } from '../utils/dom.js';
 
 blockRegistry.register('code', {
-  render(block) {
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
     const wrapper = document.createElement('div');
     wrapper.className = 'bre-code-wrapper';
 
@@ -24,7 +26,7 @@ blockRegistry.register('code', {
     code.setAttribute('contenteditable', 'true');
     code.setAttribute('data-bre-field', 'code');
     code.setAttribute('spellcheck', 'false');
-    code.setAttribute('data-bre-placeholder', '// Code\u2026');
+    code.setAttribute('data-bre-placeholder', m.code);
     code.textContent = (block.data && block.data.code) || '';
 
     pre.appendChild(code);

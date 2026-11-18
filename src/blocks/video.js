@@ -6,6 +6,10 @@
  * Registered by editor.js after opts are resolved.
  */
 import { escapeHTML } from '../utils/dom.js';
+import { blockRegistry } from '../core/blockRegistry.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
+
+const DEFAULT_ALLOWLIST = ['youtube.com', 'youtu.be', 'vimeo.com'];
 
 /**
  * Try to extract a safe embed URL for known providers.
@@ -21,15 +25,16 @@ function getEmbedUrl(src, embedAllowlist) {
     );
     if (!allowed) return null;
 
-    // YouTube
-    if (host === 'youtube.com' || host === 'youtu.be') {
+    // YouTube (watch, youtu.be, /embed/, /shorts/, /live/, m.youtube.com)
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
       let id;
       if (host === 'youtu.be') {
-        id = url.pathname.slice(1).split('?')[0];
+        id = url.pathname.slice(1).split('/')[0];
       } else {
-        id = url.searchParams.get('v');
+        const m = /^\/(?:embed|shorts|live|v)\/([\w-]+)/.exec(url.pathname);
+        id = m ? m[1] : url.searchParams.get('v');
       }
-      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+      return id && /^[\w-]+$/.test(id) ? `https://www.youtube-nocookie.com/embed/${id}` : null;
     }
 
     // Vimeo
@@ -44,9 +49,12 @@ function getEmbedUrl(src, embedAllowlist) {
   }
 }
 
-export function createVideoPlugin(embedAllowlist) {
-  return {
-    render(block) {
+// The allowlist comes from the per-editor ctx, so several editors on one page
+// with different allowlists no longer overwrite each other.
+const videoPlugin = {
+    render(block, ctx) {
+      const embedAllowlist = ctx?.embedAllowlist || DEFAULT_ALLOWLIST;
+      const m = ctx?.messages || DEFAULT_MESSAGES;
       const src = (block.data && block.data.src) || '';
       const caption = (block.data && block.data.caption) || '';
 
@@ -74,7 +82,7 @@ export function createVideoPlugin(embedAllowlist) {
       } else {
         const placeholder = document.createElement('div');
         placeholder.className = 'bre-video-placeholder';
-        placeholder.textContent = 'Click to set video URL or paste a YouTube/Vimeo link';
+        placeholder.textContent = m.videoEmpty;
         figure.appendChild(placeholder);
       }
 
@@ -82,14 +90,15 @@ export function createVideoPlugin(embedAllowlist) {
       figcaption.className = 'bre-media-caption';
       figcaption.setAttribute('contenteditable', 'true');
       figcaption.setAttribute('data-bre-field', 'caption');
-      figcaption.setAttribute('data-bre-placeholder', 'Caption…');
+      figcaption.setAttribute('data-bre-placeholder', m.caption);
       figcaption.textContent = caption;
       figure.appendChild(figcaption);
 
       return figure;
     },
 
-    toHTML(block) {
+    toHTML(block, ctx) {
+      const embedAllowlist = ctx?.embedAllowlist || DEFAULT_ALLOWLIST;
       const src = (block.data && block.data.src) || '';
       if (!src) return '';
       const caption = escapeHTML((block.data && block.data.caption) || '');
@@ -114,5 +123,11 @@ export function createVideoPlugin(embedAllowlist) {
       marks: [],
       links: false,
     },
-  };
+};
+
+blockRegistry.register('video', videoPlugin);
+
+/** @deprecated kept for backwards compatibility; allowlist now flows via ctx. */
+export function createVideoPlugin() {
+  return videoPlugin;
 }

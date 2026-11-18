@@ -1,172 +1,248 @@
 /**
- * Drag handle — pointer-event based block reordering for Best Rich Editor.
+ * Block drag-and-drop for Best Rich Editor.
+ *
+ * A SINGLE handle element is shared by all blocks (instead of 1 handle + SVG
+ * per block): it is repositioned onto the hovered / focused top-level block.
+ * That removes ~10 DOM nodes per block.
+ *
+ * Pointer events cover mouse, pen and touch (the handle sets touch-action:none).
+ * Keyboard alternative: Alt+Shift+ArrowUp / ArrowDown moves the current block.
  */
 
 /**
- * Initialize drag handle behavior.
- * @param {Element} root - editor root element
- * @param {object} state - editor state
- * @param {object} renderer - editor renderer
+ * @param {Element} root       editor root (positioned ancestor of handle/drop line)
+ * @param {Element} content    element that directly contains the block wrappers
+ * @param {object}  state
+ * @param {object}  renderer
+ * @param {{ messages: object, isReadOnly: () => boolean, onMove: (info) => void }} hooks
  */
-export function initDragHandles(root, state, renderer) {
+export function initDragHandles(root, content, state, renderer, hooks) {
+  const { messages, isReadOnly, onMove, onHandleClick } = hooks;
+
+  const handle = document.createElement('div');
+  handle.className = 'bre-drag-handle';
+  handle.setAttribute('data-bre-handle', '');
+  handle.setAttribute('aria-hidden', 'true');
+  handle.setAttribute('title', messages.dragHandle);
+  handle.hidden = true;
+  handle.textContent = '⋮⋮'; // ⋮⋮ — one text node
+  root.appendChild(handle);
+
+  const dropLine = document.createElement('div');
+  dropLine.className = 'bre-drop-line';
+  dropLine.hidden = true;
+  root.appendChild(dropLine);
+
+  let hoveredEl = null; // top-level .bre-block currently under the handle
   let dragging = false;
   let dragBlockId = null;
-  let dragStartY = 0;
-  let dropLine = null;
   let targetIndex = -1;
+  let lastClientY = 0;
+  let pending = null; // pointerdown on the handle, not yet a drag
+  const DRAG_THRESHOLD = 4; // px of movement before a press becomes a drag
 
-  // Create the drop indicator line
-  function createDropLine() {
-    const line = document.createElement('div');
-    line.className = 'bre-drop-line';
-    line.style.display = 'none';
-    root.appendChild(line);
-    return line;
-  }
-
-  dropLine = createDropLine();
-
-  /**
-   * Get all top-level block elements in order.
-   */
-  function getTopLevelBlockEls() {
-    return Array.from(root.querySelectorAll(':scope > .bre-block'));
-  }
-
-  /**
-   * Find the block element from a handle element.
-   */
-  function getBlockElFromHandle(handleEl) {
-    return handleEl.closest('[data-bre-block-id]');
-  }
-
-  /**
-   * Get the block id from a block element.
-   */
-  function getBlockId(blockEl) {
-    return blockEl.getAttribute('data-bre-block-id');
-  }
-
-  /**
-   * Check if a block is a direct child of root (top-level).
-   */
-  function isTopLevel(blockEl) {
-    return blockEl.parentElement === root;
-  }
-
-  /**
-   * Calculate the drop index based on Y position.
-   */
-  function calcDropIndex(clientY) {
-    const blockEls = getTopLevelBlockEls();
-    for (let i = 0; i < blockEls.length; i++) {
-      const rect = blockEls[i].getBoundingClientRect();
-      const midY = rect.top + rect.height / 2;
-      if (clientY < midY) return i;
+  /** Climb from any node to its top-level block wrapper. */
+  function topLevelBlock(node) {
+    let el = node && node.closest ? node.closest('.bre-block') : null;
+    while (el && el.parentElement !== content) {
+      el = el.parentElement ? el.parentElement.closest('.bre-block') : null;
     }
-    return blockEls.length;
+    return el;
   }
 
-  /**
-   * Show the drop indicator at the given index.
-   */
-  function showDropLine(index) {
-    const blockEls = getTopLevelBlockEls();
-    dropLine.style.display = 'block';
+  function place(el) {
+    // While a press is pending/dragging the browser captures the pointer on the
+    // root and fires hover events aimed at it; those must not hide the handle.
+    if (el === hoveredEl || dragging || pending) return;
+    hoveredEl = el;
+    if (!el || isReadOnly()) {
+      handle.hidden = true;
+      return;
+    }
+    handle.hidden = false;
+    // offsetTop is relative to the shared positioned ancestor (root).
+    handle.style.top = el.offsetTop + 'px';
+  }
 
-    if (blockEls.length === 0) {
+  function onPointerOver(e) {
+    if (dragging || e.target === handle) return;
+    place(topLevelBlock(e.target));
+  }
+
+  function onFocusIn(e) {
+    place(topLevelBlock(e.target));
+  }
+
+  function onPointerLeave() {
+    if (dragging) return;
+    // Keep the handle on the focused block if focus is inside the editor.
+    const active = document.activeElement;
+    const focusedBlock = active && root.contains(active) ? topLevelBlock(active) : null;
+    place(focusedBlock);
+  }
+
+  // ── Drop-index maths ────────────────────────────────────────────────────
+
+  function blockEls() {
+    return content.querySelectorAll(':scope > .bre-block');
+  }
+
+  function calcDropIndex(clientY) {
+    const els = blockEls();
+    // Binary search on block midpoints (blocks are in document order).
+    let lo = 0;
+    let hi = els.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const r = els[mid].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo;
+  }
+
+  function showDropLine(index) {
+    const els = blockEls();
+    dropLine.hidden = false;
+    if (els.length === 0) {
       dropLine.style.top = '0px';
       return;
     }
-
-    if (index >= blockEls.length) {
-      const last = blockEls[blockEls.length - 1];
-      const rect = last.getBoundingClientRect();
-      const rootRect = root.getBoundingClientRect();
-      dropLine.style.top = `${rect.bottom - rootRect.top}px`;
-    } else {
-      const el = blockEls[index];
-      const rect = el.getBoundingClientRect();
-      const rootRect = root.getBoundingClientRect();
-      dropLine.style.top = `${rect.top - rootRect.top}px`;
-    }
+    const target = index >= els.length ? els[els.length - 1] : els[index];
+    const y = index >= els.length ? target.offsetTop + target.offsetHeight : target.offsetTop;
+    dropLine.style.top = y + 'px';
   }
 
-  root.addEventListener('pointerdown', (e) => {
-    const handle = e.target.closest('[data-bre-handle]');
-    if (!handle) return;
+  // ── Pointer drag ────────────────────────────────────────────────────────
 
-    const blockEl = getBlockElFromHandle(handle);
-    if (!blockEl) return;
-
-    // Only handle top-level blocks
-    if (!isTopLevel(blockEl)) return;
-
+  function onPointerDown(e) {
+    const h = e.target.closest('[data-bre-handle]');
+    if (!h || !hoveredEl || isReadOnly()) return;
     e.preventDefault();
+    // A press only becomes a drag after moving; a plain click opens the block menu.
+    pending = {
+      id: hoveredEl.getAttribute('data-bre-block-id'),
+      x: e.clientX,
+      y: e.clientY,
+      rect: handle.getBoundingClientRect(), // measured while the handle is certainly visible
+    };
+    try { root.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+  }
 
+  function startDrag() {
     dragging = true;
-    dragBlockId = getBlockId(blockEl);
-    dragStartY = e.clientY;
-
-    // Capture pointer so we keep receiving events
-    root.setPointerCapture(e.pointerId);
-
-    blockEl.classList.add('bre-block--dragging');
+    dragBlockId = pending.id;
     targetIndex = -1;
-  });
+    pending = null;
+    if (hoveredEl) hoveredEl.setAttribute('data-bre-dragging', '');
+  }
 
-  root.addEventListener('pointermove', (e) => {
-    if (!dragging || !dragBlockId) return;
-
-    const newIndex = calcDropIndex(e.clientY);
-    targetIndex = newIndex;
-    showDropLine(newIndex);
-  });
-
-  root.addEventListener('pointerup', (e) => {
-    if (!dragging || !dragBlockId) return;
-
-    dragging = false;
-    dropLine.style.display = 'none';
-
-    const blockEl = renderer.getBlockEl(dragBlockId);
-    if (blockEl) blockEl.classList.remove('bre-block--dragging');
-
-    const fromIndex = state.getBlockIndex(dragBlockId);
-    if (fromIndex === -1 || targetIndex === -1) {
-      dragBlockId = null;
-      return;
+  function onPointerMove(e) {
+    if (pending && !dragging) {
+      if (Math.hypot(e.clientX - pending.x, e.clientY - pending.y) < DRAG_THRESHOLD) return;
+      startDrag();
     }
+    if (!dragging) return;
+    lastClientY = e.clientY;
+    targetIndex = calcDropIndex(lastClientY);
+    showDropLine(targetIndex);
+  }
 
-    // Calculate effective toIndex accounting for removal
-    let toIndex = targetIndex;
-    if (toIndex > fromIndex) toIndex--;
-
-    if (toIndex !== fromIndex) {
-      state.moveBlock(fromIndex, toIndex);
-      // Full re-render preserves virtual renderer spacers and handles all cases cleanly.
-      renderer.renderAll(state.getBlocks());
-      root.appendChild(dropLine);
-    }
-
-    dragBlockId = null;
-    targetIndex = -1;
-
-    root.releasePointerCapture(e.pointerId);
-  });
-
-  root.addEventListener('pointercancel', (e) => {
+  function endDrag(e, commit) {
     if (!dragging) return;
     dragging = false;
-    dropLine.style.display = 'none';
-
-    if (dragBlockId) {
-      const blockEl = renderer.getBlockEl(dragBlockId);
-      if (blockEl) blockEl.classList.remove('bre-block--dragging');
-    }
-
+    dropLine.hidden = true;
+    const dragEl = renderer.getBlockEl(dragBlockId);
+    if (dragEl) dragEl.removeAttribute('data-bre-dragging');
+    const id = dragBlockId;
+    const target = targetIndex;
     dragBlockId = null;
     targetIndex = -1;
-    root.releasePointerCapture(e.pointerId);
-  });
+    try { root.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+
+    if (!commit || target === -1) return;
+    const from = state.getBlockIndex(id);
+    if (from === -1) return;
+    // target is an index among RENDERED blocks; offset into the full document
+    // (non-zero when virtualized and scrolled).
+    let to = target + (renderer.firstRenderedIndex ? renderer.firstRenderedIndex() : 0);
+    if (to > from) to--;
+    if (to === from) return;
+    state.saveUndoSnapshot();
+    state.moveBlock(from, to);
+    renderer.refresh(state.getBlocks());
+    hoveredEl = null;
+    handle.hidden = true;
+    onMove({ blockId: id, from, to });
+  }
+
+  function onPointerUp(e) {
+    if (pending && !dragging) {
+      const { id, rect } = pending;
+      pending = null;
+      try { root.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      // Notion-style: the menu opens just to the right of the handle, level with it.
+      const anchorRect = { top: rect.top, bottom: rect.top, left: rect.right + 4, right: rect.right + 4 };
+      if (onHandleClick) onHandleClick({ blockId: id, anchorRect });
+      return;
+    }
+    endDrag(e, true);
+  }
+  function onPointerCancel(e) {
+    pending = null;
+    endDrag(e, false);
+  }
+
+  // ── Keyboard alternative ────────────────────────────────────────────────
+
+  function onKeyDown(e) {
+    if (!(e.altKey && e.shiftKey) || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    if (isReadOnly()) return;
+    const blockEl = topLevelBlock(e.target);
+    if (!blockEl) return;
+    e.preventDefault();
+    const id = blockEl.getAttribute('data-bre-block-id');
+    const from = state.getBlockIndex(id);
+    const to = from + (e.key === 'ArrowUp' ? -1 : 1);
+    if (from === -1 || to < 0 || to >= state.getBlocks().length) return;
+    state.saveUndoSnapshot();
+    state.moveBlock(from, to);
+    renderer.refresh(state.getBlocks());
+    // Restore focus to the moved block.
+    const el = renderer.getBlockEl(id);
+    const field = el && el.querySelector('[data-bre-field]');
+    if (field) field.focus();
+    hoveredEl = null;
+    place(el ? topLevelBlock(el) : null);
+    onMove({ blockId: id, from, to });
+  }
+
+  root.addEventListener('pointerover', onPointerOver);
+  root.addEventListener('focusin', onFocusIn);
+  root.addEventListener('pointerleave', onPointerLeave);
+  root.addEventListener('pointerdown', onPointerDown);
+  root.addEventListener('pointermove', onPointerMove);
+  root.addEventListener('pointerup', onPointerUp);
+  root.addEventListener('pointercancel', onPointerCancel);
+  root.addEventListener('keydown', onKeyDown);
+
+  return {
+    /** Re-sync after content changes the layout (undo, paste, readOnly toggle). */
+    refresh() {
+      hoveredEl = null;
+      handle.hidden = true;
+    },
+    destroy() {
+      root.removeEventListener('pointerover', onPointerOver);
+      root.removeEventListener('focusin', onFocusIn);
+      root.removeEventListener('pointerleave', onPointerLeave);
+      root.removeEventListener('pointerdown', onPointerDown);
+      root.removeEventListener('pointermove', onPointerMove);
+      root.removeEventListener('pointerup', onPointerUp);
+      root.removeEventListener('pointercancel', onPointerCancel);
+      root.removeEventListener('keydown', onKeyDown);
+      handle.remove();
+      dropLine.remove();
+    },
+  };
 }

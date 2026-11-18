@@ -3,10 +3,12 @@
  * data: { src: string, caption?: string }
  */
 import { blockRegistry } from '../core/blockRegistry.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 import { escapeHTML } from '../utils/dom.js';
 
 blockRegistry.register('audio', {
-  render(block) {
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
     const src = (block.data && block.data.src) || '';
     const caption = (block.data && block.data.caption) || '';
 
@@ -22,7 +24,7 @@ blockRegistry.register('audio', {
     } else {
       const placeholder = document.createElement('div');
       placeholder.className = 'bre-audio-placeholder';
-      placeholder.textContent = 'Click to set audio URL';
+      placeholder.textContent = m.audioEmpty;
       figure.appendChild(placeholder);
     }
 
@@ -30,7 +32,7 @@ blockRegistry.register('audio', {
     figcaption.className = 'bre-media-caption';
     figcaption.setAttribute('contenteditable', 'true');
     figcaption.setAttribute('data-bre-field', 'caption');
-    figcaption.setAttribute('data-bre-placeholder', 'Caption…');
+    figcaption.setAttribute('data-bre-placeholder', m.caption);
     figcaption.textContent = caption;
     figure.appendChild(figcaption);
 

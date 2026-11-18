@@ -1,6 +1,7 @@
 /**
  * DOM helpers for Best Rich Editor.
  */
+import { sanitizeHTML } from './sanitize.js';
 
 /**
  * Create a DOM element with attributes and children.
@@ -38,6 +39,24 @@ export function escapeHTML(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * Populate an inline-content element from block data.
+ * Plain text takes the textContent fast path (no parsing, no sanitizing);
+ * markup goes through DOMPurify.
+ */
+export function setInlineContent(el, data) {
+  if (data && typeof data.html === 'string') {
+    const html = data.html;
+    if (html.indexOf('<') === -1 && html.indexOf('&') === -1) {
+      el.textContent = html;
+    } else {
+      el.innerHTML = sanitizeHTML(html);
+    }
+  } else if (data && typeof data.text === 'string') {
+    el.textContent = data.text;
+  }
 }
 
 /**

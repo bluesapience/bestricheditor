@@ -2,24 +2,31 @@
  * Heading block plugin (supports levels 1-6).
  */
 import { blockRegistry } from '../core/blockRegistry.js';
-import { escapeHTML } from '../utils/dom.js';
+import { escapeHTML, setInlineContent } from '../utils/dom.js';
+import { DEFAULT_MESSAGES } from '../core/messages.js';
 import { sanitizeHTML } from '../utils/sanitize.js';
 
+/** Heading level is data from the document: always clamp to an integer 1–6. */
+function levelOf(block) {
+  const n = parseInt(block.data && block.data.level, 10);
+  return n >= 1 && n <= 6 ? n : 1;
+}
+
 blockRegistry.register('heading', {
-  render(block) {
-    const level = (block.data && block.data.level) || 1;
+  render(block, ctx) {
+    const m = ctx?.messages || DEFAULT_MESSAGES;
+    const level = levelOf(block);
     const el = document.createElement(`h${level}`);
     el.className = `bre-block-content bre-heading bre-heading--${level}`;
     el.setAttribute('contenteditable', 'true');
     el.setAttribute('data-bre-field', 'html');
-    el.setAttribute('data-bre-placeholder', `Heading ${level}`);
-    const rawHTML = block.data?.html ?? escapeHTML(block.data?.text ?? '');
-    el.innerHTML = sanitizeHTML(rawHTML);
+    el.setAttribute('data-bre-placeholder', m.heading.replace('{n}', String(level)));
+    setInlineContent(el, block.data);
     return el;
   },
 
   toHTML(block) {
-    const level = (block.data && block.data.level) || 1;
+    const level = levelOf(block);
     const html = block.data?.html != null ? sanitizeHTML(block.data.html) : escapeHTML(block.data?.text ?? '');
     return `<h${level}>${html}</h${level}>`;
   },
