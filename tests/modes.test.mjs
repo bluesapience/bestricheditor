@@ -302,3 +302,38 @@ test('BREW: formula click opens an edit dialog (Remove deletes it)', async () =>
   assert.equal(brewTypes(ed).includes('formula'), false);
   ed.destroy();
 });
+
+test('BREW: captions under image/audio/video are editable inline and saved', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: 'old' } },
+    { id: 'v', type: 'video', data: { src: 'https://example.com/a.mp4', caption: '' } },
+  ]));
+  const caps = host.querySelectorAll('figcaption.bre-media-caption');
+  assert.equal(caps.length, 2);
+  for (const c of caps) assert.equal(c.getAttribute('contenteditable'), 'true');
+  assert.ok(caps[1].getAttribute('data-bre-placeholder'), 'placeholder text for empty caption');
+  // click in the caption must not select the block / open a dialog
+  ev(caps[0], 'click');
+  assert.equal(host.querySelectorAll('[data-bre-selected]').length, 0);
+  // type into captions
+  caps[0].textContent = 'A new caption';
+  ev(caps[0], 'input');
+  caps[1].textContent = 'Video caption';
+  ev(caps[1], 'input');
+  await tick(5);
+  const blocks = ed.getJSON().blocks;
+  assert.equal(blocks[0].data.caption, 'A new caption');
+  assert.equal(blocks[1].data.caption, 'Video caption');
+  assert.match(ed.getHTML(), /<figcaption>A new caption<\/figcaption>/);
+  // Enter commits instead of inserting a line break
+  const enter = ev(caps[0], 'keydown', { key: 'Enter' });
+  assert.ok(enter.defaultPrevented);
+  // read-only locks them
+  ed.setReadOnly(true);
+  for (const c of host.querySelectorAll('figcaption.bre-media-caption')) assert.equal(c.getAttribute('contenteditable'), 'false');
+  ed.setReadOnly(false);
+  for (const c of host.querySelectorAll('figcaption.bre-media-caption')) assert.equal(c.getAttribute('contenteditable'), 'true');
+  ed.destroy();
+});

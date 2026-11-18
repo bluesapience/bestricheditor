@@ -366,14 +366,14 @@ export function createBrewEditor(container, options = {}) {
         const inner = src
           ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(d.alt || '')}" loading="lazy">`
           : `<div class="bre-image-placeholder">${escapeHTML(messages.imagePlaceholder)}</div>`;
-        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
       }
       case 'audio': {
         const src = d.src || '';
         const inner = src
           ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
           : `<div class="bre-audio-placeholder">${escapeHTML(messages.audioPlaceholder)}</div>`;
-        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
       }
       case 'video': {
         const src = d.src || '';
@@ -382,7 +382,7 @@ export function createBrewEditor(container, options = {}) {
         if (!src) inner = `<div class="bre-video-placeholder">${escapeHTML(messages.videoPlaceholder)}</div>`;
         else if (embedUrl) inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
         else inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
-        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
       }
       default:
         return '';
@@ -1179,8 +1179,9 @@ export function createBrewEditor(container, options = {}) {
 
     // Media / divider: a click selects the block (outline); Delete removes it,
     // Enter or double-click edits. Never opens a dialog by accident.
+    // (Clicks in the caption just place the caret: captions are edited inline.)
     const selectable = e.target.closest('figure[data-bre-type], hr');
-    if (selectable && surface.contains(selectable)) {
+    if (selectable && surface.contains(selectable) && !e.target.closest('figcaption')) {
       e.preventDefault();
       selectBlockEl(selectable);
       return;
@@ -1195,7 +1196,7 @@ export function createBrewEditor(container, options = {}) {
   listen(surface, 'dblclick', (e) => {
     if (readOnly) return;
     const fig = e.target.closest('figure[data-bre-type]');
-    if (fig && surface.contains(fig) && ['image', 'audio', 'video'].includes(fig.getAttribute('data-bre-type'))) {
+    if (fig && surface.contains(fig) && !e.target.closest('figcaption') && ['image', 'audio', 'video'].includes(fig.getAttribute('data-bre-type'))) {
       e.preventDefault();
       showMediaDialog(fig);
     }
@@ -1241,6 +1242,11 @@ export function createBrewEditor(container, options = {}) {
   }
 
   listen(surface, 'keydown', (e) => {
+    // Enter in a caption commits it (no line breaks in a one-line caption).
+    if (e.key === 'Enter' && e.target.closest && e.target.closest('figcaption.bre-media-caption')) {
+      e.preventDefault();
+      return;
+    }
     if (readOnly || !selectedBlockEl || e.target !== selectedBlockEl) return;
     if (e.key === 'Backspace' || e.key === 'Delete') {
       e.preventDefault();
@@ -1330,6 +1336,12 @@ export function createBrewEditor(container, options = {}) {
         surface.replaceChildren();
       }
     }
+    // Caption typed inline: mirror it onto the figure attribute the serializer reads.
+    const cap = e.target.closest && e.target.closest('figcaption.bre-media-caption');
+    if (cap) {
+      const fig = cap.closest('figure[data-bre-type]');
+      if (fig) fig.setAttribute('data-bre-caption', cap.textContent || '');
+    }
     wrapBareText();
     scheduleChange();
   });
@@ -1391,6 +1403,9 @@ export function createBrewEditor(container, options = {}) {
   function applyIslandsReadOnly() {
     for (const cell of surface.querySelectorAll('[data-bre-table-row]')) {
       cell.setAttribute('contenteditable', readOnly ? 'false' : 'true');
+    }
+    for (const cap of surface.querySelectorAll('.bre-media-caption')) {
+      cap.setAttribute('contenteditable', readOnly ? 'false' : 'true');
     }
     for (const c of surface.querySelectorAll('.bre-table-controls')) c.hidden = readOnly;
   }
