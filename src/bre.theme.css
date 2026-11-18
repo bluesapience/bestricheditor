@@ -22,7 +22,8 @@
  *   --bre-pad           base spacing unit for chrome                         (10px)
  *   --bre-focus         selected-block outline                               (Highlight)
  *   --bre-gutter        left space reserved for the drag handle (BRE)        (1.75em)
- *   --bre-min-height    writing area height (BREW / BREM)                    (300px)
+ *   --bre-min-height    writing area height (all modes)                       (300px)
+ *   --bre-tail          clickable space below the last block                  (3em)
  *
  * Defaults use system colors, so black-on-white pages get black buttons with
  * white text and dark pages (color-scheme: dark) get the inverse automatically.
@@ -133,9 +134,14 @@
   opacity: 0.4;
   padding-inline-end: 6px;
 }
-/* Reserve room for the handle inside the editor instead of overflowing the page. */
+/* Reserve room for the handle inside the editor instead of overflowing the page.
+   The bottom padding is a click target: clicking the empty space below the last
+   block moves the caret there (or adds a line when the last block can't take text). */
 .bre-editor[data-bre-mode="BRE"] {
   padding-inline-start: var(--bre-gutter, 1.75em);
+  padding-bottom: var(--bre-tail, 3em);
+  min-height: var(--bre-min-height, 300px);
+  box-sizing: border-box;
 }
 .bre-editor[data-bre-mode="BRE"] .bre-drag-handle {
   inset-inline-start: var(--bre-gutter, 1.75em);
@@ -172,6 +178,8 @@
 }
 .bre-brew-surface {
   min-height: var(--bre-min-height, 300px);
+  padding-bottom: var(--bre-tail, 3em);
+  box-sizing: border-box;
 }
 .bre-brem-textarea,
 .bre-brem-preview {

@@ -476,3 +476,22 @@ test('BREW: formula dialog sits just below its line and spans the block width', 
   assert.equal(dlg.style.left, '0px');
   ed.destroy();
 });
+
+test('BREW end of doc: ↓ from a table\'s last row exits to a new line; ↑ from the first row selects the block above', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 't', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } },
+  ]));
+  const cell = (r) => host.querySelector(`[data-bre-table-row="${r}"]`);
+  const down = ev(cell(0), 'keydown', { key: 'ArrowDown' });
+  assert.ok(!down.defaultPrevented, 'not the last row: native behaviour');
+  const out = ev(cell(1), 'keydown', { key: 'ArrowDown' });
+  assert.ok(out.defaultPrevented);
+  await tick(5);
+  assert.deepEqual(brewTypes(ed), ['image', 'table', 'paragraph']);
+  ev(cell(0), 'keydown', { key: 'ArrowUp' });
+  assert.ok(host.querySelector('figure').hasAttribute('data-bre-selected'), '↑ from the first row selects the image above');
+  ed.destroy();
+});

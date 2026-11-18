@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- **Adding a line at the end of the document**: in BRE, clicking the empty space below the last block puts the caret there, or adds a new paragraph when the last block can't take text (image, audio, video, table, divider, code, formula); `↓` on a selected last block and `↓` from a table's last row do the same (`↑` from the first row moves up). BREW gets the table arrows too, and its end-of-document paragraph no longer depends on `execCommand('insertHTML')`. The theme reserves a clickable tail below the content (`--bre-tail`, default 3em; the editor also has a `--bre-min-height`), so there is always somewhere to click even in a long document.
 - Table controls (add/remove row/column, delete table) are shown only while the caret is inside the table, in BRE and BREW. In BRE, focus is restored to a cell after each action so the controls stay up.
 - BREW: the media and formula edit dialogs now span the width of the block they edit (min 280 px, never wider than the editor).
 - BREW: you can add a line at the end of the document when the last block is an image, audio, video, table, divider or code block — click the empty space below it, or press `↓` on the selected block (also selects/moves between neighbouring blocks).

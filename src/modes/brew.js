@@ -1111,15 +1111,13 @@ export function createBrewEditor(container, options = {}) {
   }
 
   function appendParagraphAtEnd() {
-    const before = surface.lastElementChild;
-    placeCaret(surface, true);
-    try { document.execCommand('insertHTML', false, '<p><br></p>'); } catch (_) { /* fall back */ }
-    if (surface.lastElementChild === before) { // no native insert (or nothing happened)
-      const p = document.createElement('p');
-      p.appendChild(document.createElement('br'));
-      surface.appendChild(p);
-    }
-    placeCaret(surface.lastElementChild, false);
+    // Direct DOM insert: execCommand('insertHTML') with the caret after a
+    // non-editable block behaves differently across browsers (it can nest the
+    // paragraph inside the previous block), so don't rely on it here.
+    const p = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    surface.appendChild(p);
+    placeCaret(p, false);
     scheduleChange();
   }
 
@@ -1233,6 +1231,25 @@ export function createBrewEditor(container, options = {}) {
   }
 
   listen(surface, 'keydown', (e) => {
+    // Arrow out of a table: ↓ from the last row / ↑ from the first row.
+    const tcell = !readOnly && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.shiftKey && !e.altKey
+      && e.target.closest ? e.target.closest('[data-bre-table-row]') : null;
+    if (tcell) {
+      const wrapper = tcell.closest('[data-bre-type="table"]');
+      if (wrapper) {
+        const row = parseInt(tcell.getAttribute('data-bre-table-row'), 10);
+        const last = wrapper.querySelectorAll('tr').length - 1;
+        const dir = e.key === 'ArrowDown' ? 'nextElementSibling' : 'previousElementSibling';
+        if ((e.key === 'ArrowDown' && row === last) || (e.key === 'ArrowUp' && row === 0)) {
+          e.preventDefault();
+          const sib = wrapper[dir];
+          if (!sib) { if (e.key === 'ArrowDown') appendParagraphAtEnd(); }
+          else if (isTextBlock(sib)) placeCaret(sib, e.key === 'ArrowUp');
+          else selectBlockEl(sib);
+          return;
+        }
+      }
+    }
     // Enter in a caption commits it (no line breaks in a one-line caption).
     if (e.key === 'Enter' && e.target.closest && e.target.closest('figcaption.bre-media-caption')) {
       e.preventDefault();

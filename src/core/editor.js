@@ -447,8 +447,42 @@ export function createEditor(container, options = {}) {
   }
 
   // ── Click handler ──────────────────────────────────────────────────────────
+  /**
+   * Append an empty paragraph at the very end and put the caret in it. This is how
+   * you add a line after a last block you can't type after (image, table, divider, code…).
+   */
+  function appendParagraphAtEnd() {
+    const blocks = state.getBlocks();
+    const last = blocks[blocks.length - 1];
+    const p = makeBlock('paragraph', { html: '' });
+    state.saveUndoSnapshot();
+    state.addBlock(p, last ? last.id : null);
+    renderer.insertBlock(p, last ? last.id : null);
+    updatePlaceholder();
+    focusBlock(p.id, 0);
+    notifyChange();
+  }
+
+  /** Click in the empty space below the content: caret to the end, or a fresh line if the last block can't take text. */
+  function focusEnd() {
+    const blocks = state.getBlocks();
+    const last = blocks[blocks.length - 1];
+    if (last && hasInline(last) && last.type !== 'code') focusBlockEnd(last.id);
+    else appendParagraphAtEnd();
+  }
+
   async function handleClick(e) {
     if (readOnly) return;
+
+    // The empty area below the last block (editor tail, or the virtual spacer).
+    if (e.target === root || e.target === content || (e.target.classList && e.target.classList.contains('bre-virt-spacer-bottom'))) {
+      // Only below the last block — clicks in the side gutter must not move the caret.
+      const blocks = state.getBlocks();
+      const lastEl = blocks.length ? renderer.getBlockEl(blocks[blocks.length - 1].id) : null;
+      const below = typeof e.clientY !== 'number' || !lastEl || e.clientY >= lastEl.getBoundingClientRect().bottom;
+      if (below) { clearSelection(); focusEnd(); }
+      return;
+    }
 
     // Clicking anywhere outside the selected block clears the selection.
     if (selectedEl && !selectedEl.contains(e.target)) clearSelection();
@@ -823,6 +857,7 @@ export function createEditor(container, options = {}) {
         const i = state.getBlockIndex(id);
         const n = state.getBlocks()[i + (e.key === 'ArrowDown' ? 1 : -1)];
         if (n) focusOrSelect(n.id, e.key === 'ArrowUp');
+        else if (e.key === 'ArrowDown') { clearSelection(); appendParagraphAtEnd(); }
         return;
       }
       if (!e.metaKey && !e.ctrlKey && !(e.altKey && e.shiftKey)) return; // ignore stray typing
@@ -865,6 +900,27 @@ export function createEditor(container, options = {}) {
     const tableCellEl = e.target.closest('[data-bre-table-row]');
     if (tableCellEl) {
       if (e.key === 'Tab') { e.preventDefault(); handleTableTab(tableCellEl, e.shiftKey); return; }
+      // Arrow out of the table: ↓ from the last row / ↑ from the first row.
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.shiftKey && !e.altKey) {
+        const be = closestBlock(tableCellEl);
+        const tb = be && state.getBlock(be.getAttribute('data-bre-block-id'));
+        const row = parseInt(tableCellEl.getAttribute('data-bre-table-row'), 10);
+        if (tb && tb.type === 'table') {
+          const idx = state.getBlockIndex(tb.id);
+          const blocks = state.getBlocks();
+          if (e.key === 'ArrowDown' && row === tb.data.rows.length - 1) {
+            e.preventDefault();
+            const n = blocks[idx + 1];
+            if (n) focusOrSelect(n.id); else appendParagraphAtEnd();
+            return;
+          }
+          if (e.key === 'ArrowUp' && row === 0 && idx > 0) {
+            e.preventDefault();
+            focusOrSelect(blocks[idx - 1].id, true);
+            return;
+          }
+        }
+      }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); }
       // Cells store plain text: block native bold/italic/underline so DOM and model stay in sync.
       if ((e.ctrlKey || e.metaKey) && !e.altKey && ['b', 'i', 'u'].includes(e.key.toLowerCase())) e.preventDefault();

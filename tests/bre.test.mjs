@@ -743,3 +743,69 @@ test('BRE dialog: destroy closes an open dialog; options.prompt still overrides'
   ed.destroy();
   assert.equal(dlg(), null, 'no orphaned dialog after destroy');
 });
+
+// ── Adding a line at the end of the document (BRE) ───────────────────────────
+test('BRE end of doc: clicking below a non-text last block adds a paragraph (image/table/divider/code/media)', () => {
+  const lasts = [
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 't', type: 'table', data: { rows: [['a'], ['b']] } },
+    { id: 'h', type: 'divider', data: {} },
+    { id: 'c', type: 'code', data: { code: 'x', language: '' } },
+    { id: 'a', type: 'audio', data: { src: 'https://example.com/a.mp3', caption: '' } },
+    { id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } },
+  ];
+  for (const last of lasts) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BRE' });
+    ed.setJSON(doc([para('p', 'text'), last]));
+    fire(host.querySelector('.bre-editor'), 'click'); // empty tail area: target is the editor root
+    assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph', last.type, 'paragraph'], last.type);
+    ed.destroy();
+  }
+});
+
+test('BRE end of doc: clicking below a text last block only moves the caret (no pile-up of empty lines)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('p', 'text')]));
+  for (let i = 0; i < 3; i++) fire(host.querySelector('.bre-editor'), 'click');
+  assert.equal(ed.getJSON().blocks.length, 1);
+  ed.destroy();
+});
+
+test('BRE end of doc: clicks in the side gutter (above the last block bottom) do nothing', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x'), { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  const last = host.querySelector('[data-bre-block-id="i"]');
+  last.getBoundingClientRect = () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 });
+  fire(host.querySelector('.bre-editor'), 'click', { clientY: 150 }); // beside the image
+  assert.equal(ed.getJSON().blocks.length, 2, 'unchanged');
+  fire(host.querySelector('.bre-editor'), 'click', { clientY: 260 }); // below it
+  assert.equal(ed.getJSON().blocks.length, 3);
+  ed.destroy();
+});
+
+test('BRE end of doc: ArrowDown on a selected last block, and from a table\'s last row, creates the next line; undo removes it', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('p', 'x'), { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  fire(host.querySelector('.bre-image'), 'click');
+  fire(host.querySelector('[data-bre-block-id="i"]'), 'keydown', { key: 'ArrowDown' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph', 'image', 'paragraph']);
+  fire(host.querySelector('[data-bre-block-id="p"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph', 'image'], 'undo removes the added line');
+
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } }]));
+  fire(host.querySelector('[data-bre-table-row="0"]'), 'keydown', { key: 'ArrowDown' }); // not the last row: native
+  assert.equal(ed.getJSON().blocks.length, 1);
+  fire(host.querySelector('[data-bre-table-row="1"]'), 'keydown', { key: 'ArrowDown' }); // last row: out of the table
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['table', 'paragraph']);
+  ed.destroy();
+});
+
+test('BRE end of doc: the theme leaves a clickable tail below the content (CSS contract)', () => {
+  const css = cssSrc('bre.theme.css');
+  assert.match(css, /\.bre-editor\[data-bre-mode="BRE"\]\s*\{[^}]*padding-bottom:\s*var\(--bre-tail,\s*3em\)/);
+  assert.match(css, /\.bre-brew-surface\s*\{[^}]*padding-bottom:\s*var\(--bre-tail,\s*3em\)/);
+});

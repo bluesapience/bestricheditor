@@ -271,6 +271,7 @@ editor.setJSON(doc);
 | Inline toolbar | Select text → floating toolbar appears with Bold, Italic, Underline, Code, Link buttons |
 | Keyboard splitting | `Enter` splits a block; `Backspace` at start merges |
 | Arrow navigation | `↑` / `↓` moves between blocks |
+| Add a line at the end | Click the empty space below the last block (adds a paragraph if the last block can't take text), or `↓` on a selected block / from a table's last row |
 | Undo / redo | `⌘Z` / `Ctrl+Z` and `⌘⇧Z` / `Ctrl+Shift+Z` |
 | Multi-column layout | Insert a **Columns** block (2, 3, or 4 columns); stacks on mobile |
 | Virtualized rendering | `virtualize: 'auto'` (default) for large documents; `true` / `false` to force |
@@ -404,7 +405,8 @@ Set them on `:root` (the slash menu, block menu and floating toolbar are attache
 | `--bre-pad` | base spacing unit for editor UI | `10px` |
 | `--bre-focus` | selected-block outline color | `Highlight` |
 | `--bre-gutter` | left space for the drag handle (BRE) | `1.75em` |
-| `--bre-min-height` | writing-area height (BREW / BREM) | `300px` |
+| `--bre-min-height` | writing-area height (all modes) | `300px` |
+| `--bre-tail` | clickable space below the last block (click it to add a line at the end) | `3em` |
 
 ### Or just write CSS
 
