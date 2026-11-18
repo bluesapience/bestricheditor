@@ -16,6 +16,31 @@ const SAFE_IFRAME_ORIGINS = [
   'https://player.vimeo.com/video/',
 ];
 
+// KaTeX positions glyphs with inline styles. Only these properties, with plain
+// numeric values (or a simple color), survive. Anything else — url(), escapes,
+// expression(), unknown properties — is dropped. (Allowlist, not denylist.)
+const STYLE_PROPS = new Set([
+  'height', 'width', 'min-width', 'vertical-align', 'top', 'left', 'margin-left', 'margin-right',
+  'padding-left', 'border-bottom-width', 'font-size',
+]);
+const NUM_VALUE = /^-?(?:\d+\.?\d*|\.\d+)(?:em|ex|px|pt|%)?$/;
+const COLOR_VALUE = /^(?:#[0-9a-f]{3,8}|[a-z]{3,20})$/i;
+
+function cleanStyle(str) {
+  if (str.indexOf('\\') !== -1) return ''; // no CSS escapes
+  const out = [];
+  for (const decl of str.split(';')) {
+    const i = decl.indexOf(':');
+    if (i === -1) continue;
+    const prop = decl.slice(0, i).trim().toLowerCase();
+    const val = decl.slice(i + 1).trim();
+    if ((STYLE_PROPS.has(prop) && NUM_VALUE.test(val)) || (prop === 'color' && COLOR_VALUE.test(val))) {
+      out.push(prop + ':' + val);
+    }
+  }
+  return out.join(';');
+}
+
 function isSafeIframeSrc(src) {
   return SAFE_IFRAME_ORIGINS.some(prefix => src.startsWith(prefix));
 }
@@ -61,7 +86,9 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
-  const addAttr = ['style', 'encoding', 'contenteditable'];
+  // `style` is only ever allowed for KaTeX output, and is allowlist-filtered below.
+  const addAttr = ['encoding', 'contenteditable'];
+  if (allowKaTeX) addAttr.push('style');
 
   if (allowMedia) {
     // Allow iframe for embed-only srcs; DOMPurify hook validates the src.
@@ -69,17 +96,17 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
     addAttr.push('sandbox', 'referrerpolicy', 'allowfullscreen', 'loading', 'controls');
   }
 
-  // Hook: strip iframe src unless it matches our embed allowlist, and drop
-  // style attributes carrying anything that can load or execute (url(), expression(), @import…).
+  // Hook: strip iframe src unless it matches our embed allowlist, and reduce
+  // style attributes to the KaTeX layout allowlist above.
   const hook = (node) => {
     if (allowMedia && node.tagName === 'IFRAME') {
       const src = node.getAttribute('src') || '';
       if (!isSafeIframeSrc(src)) node.removeAttribute('src');
     }
     if (node.hasAttribute && node.hasAttribute('style')) {
-      if (/url\s*\(|expression\s*\(|javascript:|@import|behavior\s*:|-moz-binding/i.test(node.getAttribute('style'))) {
-        node.removeAttribute('style');
-      }
+      const cleaned = allowKaTeX ? cleanStyle(node.getAttribute('style')) : '';
+      if (cleaned) node.setAttribute('style', cleaned);
+      else node.removeAttribute('style');
     }
   };
 
@@ -89,6 +116,7 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false } = {}, asFr
     USE_PROFILES: { html: true, ...(allowKaTeX ? { svg: true, mathMl: true } : {}) },
     ADD_ATTR: addAttr,
     ADD_TAGS: addTags,
+    ...(allowKaTeX ? {} : { FORBID_ATTR: ['style'] }),
     ...extra,
   });
 

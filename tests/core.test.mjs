@@ -148,3 +148,35 @@ test('debounce: cancel and flush', async () => {
   d(); d.flush();
   assert.equal(n, 1);
 });
+
+test('security: malicious heading level cannot inject markup via getHTML', async () => {
+  const { mount } = await import('./env.mjs');
+  const { createEditor } = await import('../src/core/editor.js');
+  const ed = createEditor(mount(), { mode: 'BRE' });
+  const w = console.warn; console.warn = () => {};
+  ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [
+    { id: 'h', type: 'heading', data: { level: '1><img src=x onerror=alert(1)><h1', html: 'x' } },
+  ] });
+  console.warn = w;
+  const html = ed.getHTML();
+  assert.doesNotMatch(html, /<img|onerror/i);
+  assert.match(html, /^<h1>x<\/h1>$/);
+  ed.destroy();
+});
+
+test('security: style attributes are allowlisted (KaTeX only), denylist bypasses fail', () => {
+  const evil = [
+    '<span style="background:ur\\6c(javascript:alert(1))">x</span>',
+    '<span style="width:expression(alert(1))">x</span>',
+    '<span style="position:fixed;top:0;left:0;width:100%;height:100%">x</span>',
+    '<span style="height:1em;background:url(https://evil.example/t.gif)">x</span>',
+  ];
+  for (const e of evil) {
+    for (const opts of [{}, { allowMedia: true }, { allowKaTeX: true }, { allowKaTeX: true, allowMedia: true }]) {
+      const out = sanitizeHTML(e, opts);
+      assert.doesNotMatch(out, /url|expression|position|background|\\/i, e + ' ' + JSON.stringify(opts) + ' -> ' + out);
+    }
+  }
+  assert.doesNotMatch(sanitizeHTML('<span style="height:1em">x</span>', { allowMedia: true }), /style/);
+  assert.match(sanitizeHTML('<span style="height:0.69em;vertical-align:-0.08em">x</span>', { allowKaTeX: true }), /height:0.69em;vertical-align:-0.08em/);
+});

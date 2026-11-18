@@ -30,7 +30,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - **BRE → BREM `setJSON` silently produced an empty document** (data loss). Block documents are now converted to Markdown; BREM/BREW/BRE all accept each other's documents.
 - Multiple editors on a page no longer share one video-embed allowlist (it now flows per instance).
 - Default `getHTML()` no longer strips video embeds and formula markup.
-- `style` attributes are stripped from sanitized content (no `url()` / `expression()` smuggling).
+- `style` attributes are stripped from sanitized content; for KaTeX output only an allowlist of layout properties with numeric values is kept (no `url()` / `expression()` / escape smuggling).
+- Heading `level` from document data is clamped to 1–6 (a crafted level could previously inject markup into `getHTML()`).
 - Numbered lists restart correctly after non-list blocks.
 
 ### Changed
