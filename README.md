@@ -408,7 +408,7 @@ Set them on `:root` (the slash menu, block menu and floating toolbar are attache
 
 ### Or just write CSS
 
-Every default rule has **zero specificity** (`:where()`), so any selector of yours wins — no `!important`, no specificity tricks:
+The defaults are plain single-class selectors: strong enough that a CSS reset (`* { padding: 0 }`, Tailwind's `button { … }`) can't wipe them, and weak enough that your own rule for the same class (loaded after `bre.css`) wins — no `!important` needed. (The `--bre-*` defaults are the one exception: they sit at zero specificity, so your `:root { --bre-… }` always wins.)
 
 ```css
 .bre-table-btn { background: rebeccapurple; }          /* beats the default */

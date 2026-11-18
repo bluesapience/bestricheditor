@@ -145,7 +145,8 @@
 .bre-table td {
   min-width: 5em;
 }
-:where(.bre-table th, .bre-table td) {
+.bre-table th,
+.bre-table td {
   border: 1px solid var(--bre-border, currentColor);
 }
 
@@ -189,9 +190,12 @@
   position: fixed;
   z-index: 9999;
 }
-/* Visual minimums are :where() (zero specificity) so bre.theme.css, which loads
-   after, and any host rule can override them. */
-:where(.bre-slash-menu, .bre-inline-toolbar, .bre-brew-link-dialog, .bre-media-controls) {
+/* Visual minimums: plain class rules so resets can't wipe them; bre.theme.css
+   loads after at equal specificity, and a host rule for the same class overrides. */
+.bre-slash-menu,
+.bre-inline-toolbar,
+.bre-brew-link-dialog,
+.bre-media-controls {
   background: var(--bre-surface, Canvas);
   color: CanvasText;
   border: 1px solid var(--bre-border, currentColor);
@@ -208,7 +212,7 @@
   cursor: pointer;
 }
 
-:where(.bre-slash-item[data-active="true"]) {
+.bre-slash-item[data-active="true"] {
   background: var(--bre-accent, Highlight);
   color: var(--bre-accent-text, HighlightText);
 }
@@ -220,12 +224,18 @@
   display: none;
 }
 
-:where(.bre-inline-toolbar-btn, .bre-brew-btn, .bre-brew-block-type, .bre-brew-toggle, .bre-brem-toggle, .bre-table-btn) {
+.bre-inline-toolbar-btn,
+.bre-brew-btn,
+.bre-brew-block-type,
+.bre-brew-toggle,
+.bre-brem-toggle,
+.bre-table-btn {
   font: inherit;
   color: inherit;
   cursor: pointer;
 }
-:where(.bre-inline-toolbar-btn[aria-pressed="true"], .bre-brew-btn[data-active="true"]) {
+.bre-inline-toolbar-btn[aria-pressed="true"],
+.bre-brew-btn[data-active="true"] {
   font-weight: bold;
 }
 
@@ -248,7 +258,7 @@
 }
 
 /* A selected non-text block (image, audio, video, divider…): Backspace/Delete removes it. */
-:where(.bre-editor [data-bre-selected]) {
+.bre-editor [data-bre-selected] {
   outline: 2px solid var(--bre-focus, Highlight);
   outline-offset: 2px;
 }

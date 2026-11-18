@@ -6,10 +6,12 @@
  * style your content: fonts, sizes, headings, paragraphs, lists, quotes and code
  * keep inheriting from the host page.
  *
- * Every rule is wrapped in :where(), so it has ZERO specificity: any selector of
- * yours (even a bare `.bre-table-btn { … }`) overrides it. Or change the look
- * with these variables. The slash menu, block menu and floating toolbar are
- * attached to <body>, so set variables on :root (or body) for them to apply:
+ * Rules are plain single-class selectors: strong enough that a CSS reset
+ * (`* { padding: 0 }`, Tailwind's `button { … }`) cannot wipe them, and weak
+ * enough that your own class rule (same selector, loaded later) overrides them.
+ * Or change the look with these variables. The slash menu, block menu and
+ * floating toolbar are attached to <body>, so set variables on :root (or body)
+ * for them to apply:
  *
  *   --bre-accent        buttons, active menu item, pressed toolbar buttons   (CanvasText)
  *   --bre-accent-text   text on the accent color                             (Canvas)
@@ -37,51 +39,56 @@
 
 /* ── Popups: slash menu, block menu, floating toolbar, dialogs ─────────────── */
 /* (colors/borders come from the variable-aware minimums in bre-base.css) */
-:where(.bre-slash-menu, .bre-inline-toolbar, .bre-brew-link-dialog) {
+.bre-slash-menu,
+.bre-inline-toolbar,
+.bre-brew-link-dialog {
   border-radius: var(--bre-radius, 0);
   box-shadow: var(--bre-shadow, 0 8px 24px rgb(0 0 0 / 0.12));
 }
 
-:where(.bre-slash-menu) {
+.bre-slash-menu {
   min-width: 240px;
 }
-:where(.bre-block-menu) {
+.bre-block-menu {
   min-width: 180px;
 }
 
-:where(.bre-slash-item) {
+.bre-slash-item {
   padding: calc(var(--bre-pad, 10px) * 0.6) var(--bre-pad, 10px);
 }
-:where(.bre-slash-item__icon) {
+.bre-slash-item__icon {
   font-family: monospace;
   min-width: 2.5em;
   text-align: center;
 }
-:where(.bre-slash-item__desc) {
+.bre-slash-item__desc {
   opacity: 0.6;
   font-size: 0.85em;
 }
-:where(.bre-slash-item[data-active="true"] .bre-slash-item__desc) {
+.bre-slash-item[data-active="true"] .bre-slash-item__desc {
   opacity: 0.75;
 }
 
 /* ── Floating inline toolbar ───────────────────────────────────────────────── */
-:where(.bre-inline-toolbar) {
+.bre-inline-toolbar {
   padding: 2px;
 }
-:where(.bre-inline-toolbar-btn) {
+.bre-inline-toolbar-btn {
   width: 28px;
   height: 28px;
   border: 0;
   background: none;
 }
-:where(.bre-inline-toolbar-btn[aria-pressed="true"]) {
+.bre-inline-toolbar-btn[aria-pressed="true"] {
   background: var(--bre-accent, CanvasText);
   color: var(--bre-accent-text, Canvas);
 }
 
 /* ── Action buttons ────────────────────────────────────────────────────────── */
-:where(.bre-table-btn, .bre-brew-link-save, .bre-brew-link-cancel, .bre-brew-link-remove) {
+.bre-table-btn,
+.bre-brew-link-save,
+.bre-brew-link-cancel,
+.bre-brew-link-remove {
   background: var(--bre-accent, CanvasText);
   color: var(--bre-accent-text, Canvas);
   border: 1px solid var(--bre-accent, CanvasText);
@@ -89,52 +96,57 @@
   padding: calc(var(--bre-pad, 10px) * 0.4) calc(var(--bre-pad, 10px) * 1.2);
   line-height: 1.5;
 }
-:where(.bre-table-btn:hover, .bre-brew-link-save:hover, .bre-brew-link-cancel:hover, .bre-brew-link-remove:hover) {
+.bre-table-btn:hover,
+.bre-brew-link-save:hover,
+.bre-brew-link-cancel:hover,
+.bre-brew-link-remove:hover {
   opacity: 0.85;
 }
-:where(.bre-table-controls, .bre-media-controls) {
+.bre-table-controls,
+.bre-media-controls {
   gap: calc(var(--bre-pad, 10px) * 0.6);
   padding: calc(var(--bre-pad, 10px) * 0.6);
 }
 
 /* ── Dialogs (position and width are set by the library) ───────────────────── */
-:where(.bre-brew-link-dialog) {
+.bre-brew-link-dialog {
   padding: calc(var(--bre-pad, 10px) * 1.2);
   gap: calc(var(--bre-pad, 10px) * 0.8);
 }
-:where(.bre-brew-link-input) {
+.bre-brew-link-input {
   padding: calc(var(--bre-pad, 10px) * 0.6) calc(var(--bre-pad, 10px) * 0.8);
   border: 1px solid var(--bre-border, color-mix(in srgb, CanvasText 30%, transparent));
   border-radius: var(--bre-radius, 0);
 }
-:where(.bre-brew-link-actions) {
+.bre-brew-link-actions {
   gap: calc(var(--bre-pad, 10px) * 0.6);
 }
-:where(.bre-brew-link-remove) {
+.bre-brew-link-remove {
   margin-inline-end: auto;
 }
 
 /* ── Selection outline + drag handle ───────────────────────────────────────── */
-:where(.bre-editor [data-bre-selected]) {
+.bre-editor [data-bre-selected] {
   border-radius: var(--bre-radius, 0);
 }
-:where(.bre-drag-handle) {
+.bre-drag-handle {
   opacity: 0.4;
   padding-inline-end: 6px;
 }
 /* Reserve room for the handle inside the editor instead of overflowing the page. */
-:where(.bre-editor[data-bre-mode="BRE"]) {
+.bre-editor[data-bre-mode="BRE"] {
   padding-inline-start: var(--bre-gutter, 1.75em);
 }
-:where(.bre-editor[data-bre-mode="BRE"] .bre-drag-handle) {
+.bre-editor[data-bre-mode="BRE"] .bre-drag-handle {
   inset-inline-start: var(--bre-gutter, 1.75em);
 }
 
 /* ── Layout containers: tables and columns ─────────────────────────────────── */
-:where(.bre-table th, .bre-table td) {
+.bre-table th,
+.bre-table td {
   padding: calc(var(--bre-pad, 10px) * 0.6) var(--bre-pad, 10px);
 }
-:where(.bre-column) {
+.bre-column {
   padding: calc(var(--bre-pad, 10px) * 0.4) calc(var(--bre-pad, 10px) * 0.8);
   border: 1px solid var(--bre-border, color-mix(in srgb, CanvasText 18%, transparent));
   border-radius: var(--bre-radius, 0);
@@ -142,31 +154,33 @@
 }
 
 /* ── BREW toolbar + writing areas ──────────────────────────────────────────── */
-:where(.bre-brew-toolbar) {
+.bre-brew-toolbar {
   gap: 4px;
   padding: calc(var(--bre-pad, 10px) * 0.8) calc(var(--bre-pad, 10px) * 1.2);
   border-bottom: 1px solid var(--bre-border, color-mix(in srgb, CanvasText 18%, transparent));
   background: var(--bre-surface, Canvas);
 }
-:where(.bre-brew-btn, .bre-brew-block-type) {
+.bre-brew-btn,
+.bre-brew-block-type {
   border: 1px solid transparent;
   background: none;
   padding: calc(var(--bre-pad, 10px) * 0.4) calc(var(--bre-pad, 10px) * 0.8);
 }
-:where(.bre-brew-btn[data-active="true"]) {
+.bre-brew-btn[data-active="true"] {
   background: var(--bre-accent, CanvasText);
   color: var(--bre-accent-text, Canvas);
 }
-:where(.bre-brew-surface) {
+.bre-brew-surface {
   min-height: var(--bre-min-height, 300px);
 }
-:where(.bre-brem-textarea, .bre-brem-preview) {
+.bre-brem-textarea,
+.bre-brem-preview {
   min-height: var(--bre-min-height, 300px);
 }
-:where(.bre-brem-textarea) {
+.bre-brem-textarea {
   font-family: monospace;
 }
-:where(.bre-brem-toggle) {
+.bre-brem-toggle {
   margin: calc(var(--bre-pad, 10px) * 0.8);
   padding: calc(var(--bre-pad, 10px) * 0.2) var(--bre-pad, 10px);
 }

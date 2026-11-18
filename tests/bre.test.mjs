@@ -331,21 +331,36 @@ test('CSS policy: bre.base.css is structural — no literal colors, fonts, shado
   assert.doesNotMatch(css, /--bre-[\w-]+\s*:/, 'variables are only READ here, never defined');
 });
 
-test('CSS policy: bre.theme.css styles the editor chrome only, at zero specificity, with fallbacks', () => {
+test('CSS policy: bre.theme.css styles the editor chrome only, beats resets, with fallbacks', () => {
   const css = cssSrc('bre.theme.css');
-  // every rule's selector list begins with :where( — zero specificity, hosts always win
-  const selectors = css.split('}').map((r) => r.split('{')[0].trim()).filter(Boolean);
-  for (const sel of selectors) assert.match(sel, /^:where\(/, 'zero-specificity: ' + sel);
+  // Every selector carries a .bre- class (specificity >= 0,1,0): a reset such as
+  // `* { padding: 0 }` or Tailwind's `button { padding: 0 }` cannot wipe the chrome.
+  // The only :where() is the variable-defaults block, so `:root { --bre-… }` always wins.
+  const selectors = css.split('}').map((r) => r.split('{')[0].trim()).filter(Boolean)
+    .flatMap((list) => list.split(',').map((x) => x.trim()));
+  for (const sel of selectors) {
+    if (sel === ':where(:root)') continue;
+    assert.match(sel, /\.bre-/, 'selector must be class-based: ' + sel);
+    assert.doesNotMatch(sel, /:where\(/, 'no zero-specificity chrome rules: ' + sel);
+  }
   // content is never styled: the host owns fonts, headings, lists, quotes, code
   assert.doesNotMatch(css, /\.bre-(paragraph|heading|quote|code|code-wrapper|bulleted-list|numbered-list|image|video|audio)\b|\b(h[1-6]|p|blockquote|pre|ul|ol|li)\s*[,{]/, 'no content selectors');
   assert.doesNotMatch(css, /font-family\s*:(?!\s*monospace)/i, 'no font families (monospace only for code-ish UI)');
   assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'colors are system colors or variables');
   // every variable read has a fallback; variables are defined only on :where(:root)
   assert.doesNotMatch(css, /var\(--bre-[\w-]+\)/, 'var() always has a fallback');
-  const defs = css.match(/--bre-[\w-]+\s*:/g) || [];
-  assert.ok(defs.length > 0 && defs.every(() => css.indexOf(':where(:root)') !== -1));
+  assert.ok(css.includes(':where(:root)'));
   const outsideRoot = css.replace(/:where\(:root\)\s*\{[^}]*\}/, '');
   assert.doesNotMatch(outsideRoot, /--bre-[\w-]+\s*:/, 'variables only defined on :where(:root)');
+});
+
+test('CSS policy: a universal reset after bre.css cannot zero the chrome padding (specificity)', () => {
+  // Compute the specificity of the padding rules the user reported missing.
+  const css = cssSrc('bre.theme.css');
+  for (const sel of ['.bre-slash-item', '.bre-table-btn', '.bre-brew-link-dialog']) {
+    assert.ok(new RegExp('(^|\\n|,\\s*)' + sel.replace('.', '\\.') + '\\s*[,{]').test(css), sel + ' is a plain class rule');
+  }
+  assert.match(css, /\.bre-slash-item\s*\{\s*padding:/);
 });
 
 test('CSS policy: the built package ships bre.css and bre-base.css (skips if not built)', async () => {
