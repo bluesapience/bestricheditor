@@ -18,7 +18,9 @@
     "./dist/katex.css": "./dist/katex.css",
     "./dist/bre.katex.umd.js": "./dist/bre.katex.umd.js",
     "./package.json": "./package.json",
-    "./dist/bre.umd.js": "./dist/bre.umd.js"
+    "./dist/bre.umd.js": "./dist/bre.umd.js",
+    "./dist/bre-base.css": "./dist/bre-base.css",
+    "./base.css": "./dist/bre-base.css"
   },
   "files": [
     "dist",
@@ -90,7 +92,7 @@
     {
       "name": "UMD core (min+gz, no formulas)",
       "path": "dist/bre.umd.js",
-      "limit": "50 kB",
+      "limit": "52 kB",
       "gzip": true
     },
     {
@@ -102,7 +104,13 @@
     {
       "name": "bre.css (min+gz)",
       "path": "dist/bre.css",
-      "limit": "6 kB",
+      "limit": "8 kB",
+      "gzip": true
+    },
+    {
+      "name": "bre-base.css (structure only, min+gz)",
+      "path": "dist/bre-base.css",
+      "limit": "4 kB",
       "gzip": true
     }
   ]

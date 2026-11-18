@@ -1,4 +1,5 @@
 import { resolve } from 'path';
+import { unlinkSync } from 'fs';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 import postcss from 'rollup-plugin-postcss';
@@ -63,6 +64,15 @@ const prodConfigs = [
       nodeResolve(),
       postcss({ inject: true, minimize: true }),
       minify(),
+    ],
+  },
+  // Structure-only stylesheet (no default look): dist/bre-base.css
+  {
+    input: 'src/bre-base.entry.js',
+    output: { file: 'dist/.bre-base.tmp.js', format: 'esm' },
+    plugins: [
+      postcss({ extract: resolve('dist/bre-base.css'), minimize: true }),
+      { name: 'drop-tmp-js', writeBundle() { try { unlinkSync('dist/.bre-base.tmp.js'); } catch (_) { /* ignore */ } } },
     ],
   },
   // KaTeX for the UMD/CDN build

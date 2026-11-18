@@ -14,7 +14,7 @@ Full spec: `ABOUT.md`
 - No UI frameworks
 - Minimal dependencies — DOMPurify and KaTeX are the only allowed runtime deps
 - Build tool: **Rollup**
-- Styling: **structural CSS only — no visual styling.** No colors, fonts, sizes, spacing, radii, shadows or theme variables; everything inherits from the host page. Only functional rules (positioning, layout, visibility, placeholders) belong in `src/bre.css`.
+- Styling: **content is never styled** (it inherits from the host: fonts, headings, lists, quotes, code). The editor's own UI (menus, popups, dialogs, buttons, selection, controls) gets a neutral default look in `src/bre.theme.css`: zero specificity (`:where()`), system colors, driven by `--bre-*` variables with fallbacks. `src/bre.base.css` is structure only and is also published alone (`bre-base.css`). No literal colors/fonts/shadows/radii in the base file.
 - HTML sanitization: **DOMPurify** on all HTML output and pasted HTML — never raw `innerHTML`
 - Math rendering: **KaTeX** for inline (`$...$`) and block (`$$...$$`) formulas
 

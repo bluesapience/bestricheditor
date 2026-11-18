@@ -319,14 +319,46 @@ test('BRE: keyboard block move (Alt+Shift+ArrowDown)', () => {
   ed.destroy();
 });
 
-test('BRE: no hard-coded styling — stylesheet source has no colors/fonts/vars', async () => {
-  const { readFileSync } = await import('node:fs');
-  const css = readFileSync(new URL('../src/bre.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+const cssSrc = (f) => stripComments(readFileSync(new URL('../src/' + f, import.meta.url), 'utf8'));
+
+test('CSS policy: bre.base.css is structural — no literal colors, fonts, shadows or radii', () => {
+  const css = cssSrc('bre.base.css');
   assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'no hex colors');
   assert.doesNotMatch(css, /rgba?\(|hsla?\(/i, 'no rgb/hsl colors');
-  assert.doesNotMatch(css, /--bre-color|--bre-font|--bre-radius/, 'no theme variables');
   assert.doesNotMatch(css, /font-family\s*:\s*(?!inherit)/i, 'no font families');
   assert.doesNotMatch(css, /box-shadow|border-radius|font-size\s*:\s*[\d.]/i, 'no decorative rules');
+  assert.doesNotMatch(css, /--bre-[\w-]+\s*:/, 'variables are only READ here, never defined');
+});
+
+test('CSS policy: bre.theme.css styles the editor chrome only, at zero specificity, with fallbacks', () => {
+  const css = cssSrc('bre.theme.css');
+  // every rule's selector list begins with :where( — zero specificity, hosts always win
+  const selectors = css.split('}').map((r) => r.split('{')[0].trim()).filter(Boolean);
+  for (const sel of selectors) assert.match(sel, /^:where\(/, 'zero-specificity: ' + sel);
+  // content is never styled: the host owns fonts, headings, lists, quotes, code
+  assert.doesNotMatch(css, /\.bre-(paragraph|heading|quote|code|code-wrapper|bulleted-list|numbered-list|image|video|audio)\b|\b(h[1-6]|p|blockquote|pre|ul|ol|li)\s*[,{]/, 'no content selectors');
+  assert.doesNotMatch(css, /font-family\s*:(?!\s*monospace)/i, 'no font families (monospace only for code-ish UI)');
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'colors are system colors or variables');
+  // every variable read has a fallback; variables are defined only on :where(:root)
+  assert.doesNotMatch(css, /var\(--bre-[\w-]+\)/, 'var() always has a fallback');
+  const defs = css.match(/--bre-[\w-]+\s*:/g) || [];
+  assert.ok(defs.length > 0 && defs.every(() => css.indexOf(':where(:root)') !== -1));
+  const outsideRoot = css.replace(/:where\(:root\)\s*\{[^}]*\}/, '');
+  assert.doesNotMatch(outsideRoot, /--bre-[\w-]+\s*:/, 'variables only defined on :where(:root)');
+});
+
+test('CSS policy: the built package ships bre.css and bre-base.css (skips if not built)', async () => {
+  const { existsSync } = await import('node:fs');
+  const base = new URL('../dist/bre-base.css', import.meta.url);
+  const full = new URL('../dist/bre.css', import.meta.url);
+  if (!existsSync(base) || !existsSync(full)) return;
+  const b = readFileSync(base, 'utf8');
+  const f = readFileSync(full, 'utf8');
+  assert.ok(f.length > b.length, 'bre.css = base + theme');
+  assert.ok(f.includes(':where(:root){--bre-accent'), 'theme variable defaults present in bre.css');
+  assert.ok(!b.includes('--bre-accent:'), 'base build defines no variables');
+  assert.ok(!/box-shadow|border-radius/.test(b), 'base build has no decorative rules');
 });
 
 // Guards against tree-shaking dropping block registration (sideEffects flag).
@@ -571,7 +603,7 @@ test('block menu anchors beside the handle even when capture fires hover on the 
 
 test('table controls: shown only while editing (CSS contract) and focus is restored after a re-render', () => {
   // CSS: hidden by default, visible via :focus-within in BRE and BREW
-  const css = readFileSync(new URL('../src/bre.css', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/bre.base.css', import.meta.url), 'utf8');
   assert.match(css, /\.bre-table-controls\s*\{\s*display:\s*none/);
   assert.match(css, /\.bre-table-wrapper:focus-within \.bre-table-controls:not\(\[hidden\]\)/);
   assert.match(css, /\[data-bre-type="table"\]:focus-within \.bre-table-controls:not\(\[hidden\]\)/);

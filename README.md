@@ -12,7 +12,7 @@ Most rich text editors force you to pick one paradigm and stick with it. Best Ri
 
 - **Zero framework dependencies** — works with React, Vue, Svelte, Angular, or plain HTML
 - **Two runtime deps** — [DOMPurify](https://github.com/cure53/DOMPurify) (XSS sanitization) + [KaTeX](https://katex.org/) (math, loaded lazily)
-- **No visual opinions** — structural CSS only; inherits font/color/background from your app
+- **A light default look, never on your content** — the editor's own UI (menus, popups, dialogs, buttons) has a neutral default you can change with a few `--bre-*` variables or switch off (`bre-base.css`); your text, headings, lists and code always inherit from your app
 - **14 block types** — headings, lists, quotes, code, tables, images, audio, video, KaTeX formulas, multi-column layouts
 - **Fully serializable** — `getJSON()` / `setJSON()` / `getHTML()` / `setHTML()` on every mode
 - **Safe by default** — all HTML output sanitized via DOMPurify; URL injection prevented
@@ -29,7 +29,8 @@ npm install bestricheditor
 
 | Stylesheet | What it covers | How to load |
 |---|---|---|
-| `bestricheditor/dist/bre.css` | Structural editor CSS (layout, blocks, toolbar) | `import` it (ESM); auto-injected by the UMD build |
+| `bestricheditor/dist/bre.css` | Structure **+ a default look for the editor's own UI** (menus, popups, dialogs, buttons) | `import` it (ESM); auto-injected by the UMD build |
+| `bestricheditor/base.css` | Structure only — no default look at all (use instead of `bre.css`) | `import 'bestricheditor/base.css'` |
 | `bestricheditor/katex.css` | KaTeX styles + fonts (only needed if you render formulas) | `import 'bestricheditor/katex.css'` |
 
 ```js
@@ -374,14 +375,47 @@ Sourcemaps (`*.map`) are published alongside every JS file. `npm run size` enfor
 
 ## Styling
 
-The library ships **no visual styling opinions**. `bre.css` contains structural CSS only (layout, positioning, hit areas) and every block inherits font, color and background from the host page. There are no theme variables: style the editor with ordinary CSS selectors on the `.bre-*` classes.
+**Content is yours; the editor's own UI has a default look.**
+
+- **Your content** (text, headings, paragraphs, lists, quotes, code, fonts, sizes) is never styled by the library — it inherits from your page.
+- **The editor's own UI** — slash menu, block menu, floating toolbar, dialogs, action buttons, the selected-block outline, table/media controls, the drag-handle gutter — gets a neutral default look from `bre.css`. It uses system colors, so it is black-on-white on a light page and inverts automatically on a dark one (`color-scheme: dark`).
+- Want none of it? Import **`bestricheditor/base.css`** instead of `bre.css`: structure only, plus the bare usability minimums (borders, an outline), all overridable.
+
+### Change the look with variables
+
+Set them on `:root` (the slash menu, block menu and floating toolbar are attached to `<body>`, so `:root` reaches everything):
 
 ```css
-.my-editor-wrapper .bre-editor { font-family: Georgia, serif; color: #222; }
-.my-editor-wrapper .bre-block--quote { border-left: 3px solid rebeccapurple; }
+:root {
+  --bre-accent: #2563eb;      /* buttons, active menu item, pressed toolbar buttons */
+  --bre-accent-text: #fff;    /* text on the accent color */
+  --bre-radius: 6px;          /* corner radius for editor UI (default: 0, square) */
+}
 ```
 
-Inspect the rendered DOM to find the class for a given element. Add padding or a max width on your own container.
+| Variable | Controls | Default |
+|---|---|---|
+| `--bre-accent` | action buttons, active menu item, pressed toolbar buttons | `CanvasText` |
+| `--bre-accent-text` | text on the accent color | `Canvas` |
+| `--bre-surface` | popup / menu / dialog background | `Canvas` |
+| `--bre-border` | hairlines around popups, tables, columns | soft `CanvasText` |
+| `--bre-radius` | corner radius of editor UI | `0` |
+| `--bre-shadow` | popup shadow | soft drop shadow |
+| `--bre-pad` | base spacing unit for editor UI | `10px` |
+| `--bre-focus` | selected-block outline color | `Highlight` |
+| `--bre-gutter` | left space for the drag handle (BRE) | `1.75em` |
+| `--bre-min-height` | writing-area height (BREW / BREM) | `300px` |
+
+### Or just write CSS
+
+Every default rule has **zero specificity** (`:where()`), so any selector of yours wins — no `!important`, no specificity tricks:
+
+```css
+.bre-table-btn { background: rebeccapurple; }          /* beats the default */
+.bre-quote { border-left: 3px solid rebeccapurple; }   /* content is yours anyway */
+```
+
+Useful hooks: `.bre-block--{type}`, `[data-bre-selected]` (selected media/divider), `.bre-slash-item[data-active="true"]` (active menu item), `.bre-table-controls` (shown only while editing a table), `.bre-media-controls`, `.bre-brew-link-dialog`, `[data-bre-readonly]`. Inspect the DOM for the rest.
 
 ---
 

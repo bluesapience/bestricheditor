@@ -140,11 +140,13 @@
   border-collapse: collapse;
 }
 
-/* Cell borders are needed to see where to type. They use currentColor. */
+/* Cell borders are needed to see where to type. */
 .bre-table th,
 .bre-table td {
-  border: 1px solid;
   min-width: 5em;
+}
+:where(.bre-table th, .bre-table td) {
+  border: 1px solid var(--bre-border, currentColor);
 }
 
 /* ── Media ────────────────────────────────────────────────────────────── */
@@ -186,9 +188,13 @@
 .bre-brew-link-dialog {
   position: fixed;
   z-index: 9999;
-  background: Canvas;
+}
+/* Visual minimums are :where() (zero specificity) so bre.theme.css, which loads
+   after, and any host rule can override them. */
+:where(.bre-slash-menu, .bre-inline-toolbar, .bre-brew-link-dialog, .bre-media-controls) {
+  background: var(--bre-surface, Canvas);
   color: CanvasText;
-  border: 1px solid;
+  border: 1px solid var(--bre-border, currentColor);
 }
 
 .bre-slash-menu {
@@ -202,9 +208,9 @@
   cursor: pointer;
 }
 
-.bre-slash-item[data-active="true"] {
-  background: Highlight;
-  color: HighlightText;
+:where(.bre-slash-item[data-active="true"]) {
+  background: var(--bre-accent, Highlight);
+  color: var(--bre-accent-text, HighlightText);
 }
 
 .bre-inline-toolbar {
@@ -214,18 +220,12 @@
   display: none;
 }
 
-.bre-inline-toolbar-btn,
-.bre-brew-btn,
-.bre-brew-block-type,
-.bre-brew-toggle,
-.bre-brem-toggle,
-.bre-table-btn {
+:where(.bre-inline-toolbar-btn, .bre-brew-btn, .bre-brew-block-type, .bre-brew-toggle, .bre-brem-toggle, .bre-table-btn) {
   font: inherit;
   color: inherit;
   cursor: pointer;
 }
-.bre-inline-toolbar-btn[aria-pressed="true"],
-.bre-brew-btn[data-active="true"] {
+:where(.bre-inline-toolbar-btn[aria-pressed="true"], .bre-brew-btn[data-active="true"]) {
   font-weight: bold;
 }
 
@@ -240,9 +240,6 @@
   top: 0;
   inset-inline-start: 0;
   z-index: 1;
-  background: Canvas;
-  color: CanvasText;
-  border: 1px solid;
 }
 .bre-brew-surface figure[data-bre-selected] .bre-media-controls:not([hidden]),
 .bre-brew-surface figure:hover .bre-media-controls:not([hidden]),
@@ -251,8 +248,8 @@
 }
 
 /* A selected non-text block (image, audio, video, divider…): Backspace/Delete removes it. */
-.bre-editor [data-bre-selected] {
-  outline: 2px solid Highlight;
+:where(.bre-editor [data-bre-selected]) {
+  outline: 2px solid var(--bre-focus, Highlight);
   outline-offset: 2px;
 }
 .bre-block-menu:focus {

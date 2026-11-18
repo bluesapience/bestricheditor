@@ -452,7 +452,7 @@ test('BREW: ArrowDown on a selected last block creates the next line; between bl
 
 test('BREW: media controls float on the top-left while selected/hovered (CSS contract)', async () => {
   const { readFileSync } = await import('node:fs');
-  const css = readFileSync(new URL('../src/bre.css', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/bre.base.css', import.meta.url), 'utf8');
   assert.match(css, /\.bre-media-controls\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;[^}]*inset-inline-start:\s*0/);
   assert.match(css, /figure\[data-bre-selected\] \.bre-media-controls:not\(\[hidden\]\)/);
   assert.match(css, /figure:hover \.bre-media-controls:not\(\[hidden\]\)/);
