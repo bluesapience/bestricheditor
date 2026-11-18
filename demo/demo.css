@@ -81,3 +81,33 @@ body {
 .bre-brew-surface { min-height: 400px; outline: none; }
 .bre-brem-textarea { min-height: 300px; outline: none; font-family: monospace; }
 .bre-brem-toggle { margin: 8px; padding: 2px 10px; }
+
+/* ── Action buttons: black with white text (host styling, not library) ───────
+   Applies to BRE table controls and BREW's media Edit/Remove, table controls and
+   dialog buttons. */
+.bre-table-btn,
+.bre-brew-link-save,
+.bre-brew-link-cancel,
+.bre-brew-link-remove {
+  background: #111827;
+  color: #fff;
+  border: 1px solid #111827;
+  border-radius: 6px;
+  padding: 4px 12px;
+  line-height: 1.5;
+}
+.bre-table-btn:hover,
+.bre-brew-link-save:hover,
+.bre-brew-link-cancel:hover,
+.bre-brew-link-remove:hover {
+  background: #000;
+}
+.bre-table-controls,
+.bre-media-controls { gap: 6px; padding: 6px; }
+.bre-table-controls { display: flex; flex-wrap: wrap; }
+
+/* BREW dialogs (the library sets position and width; this is just the look) */
+.bre-brew-link-dialog { padding: 12px; gap: 8px; border-color: #e5e7eb; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+.bre-brew-link-input { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; }
+.bre-brew-link-actions { gap: 6px; }
+.bre-brew-link-remove { margin-right: auto; }

@@ -351,6 +351,7 @@ test('BREW: dialogs open next to what they edit, not at the editor corner', () =
   assert.ok(dlg);
   assert.equal(dlg.style.top, '200px', 'top-left corner on the image: 300 - 100');
   assert.equal(dlg.style.left, '150px', 'left edge on the image: 200 - 50');
+  assert.equal(dlg.style.width, '300px', 'spans the block it edits (image is 300 wide)');
   dlg.querySelector('.bre-brew-link-cancel').click();
   // far-right anchors are clamped inside the editor
   fig.getBoundingClientRect = () => ({ top: 300, bottom: 420, left: 840, right: 900, width: 60, height: 120 });

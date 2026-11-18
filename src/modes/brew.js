@@ -868,6 +868,8 @@ export function createBrewEditor(container, options = {}) {
     if (!r || (!r.width && !r.height)) r = rect(toolbar) || rect(surface); // collapsed range etc.
     if (!r) return;
     const rootRect = root.getBoundingClientRect();
+    // atCorner: the dialog spans the block it edits (never narrower than a usable form).
+    if (atCorner) dialog.style.width = Math.min(Math.max(r.width, 280), rootRect.width || r.width) + 'px';
     // atCorner: dialog's top-left sits on the anchor's top-left; otherwise just below it.
     const top = atCorner ? r.top - rootRect.top : r.bottom - rootRect.top + 6;
     const maxLeft = Math.max(0, rootRect.width - dialog.offsetWidth);
