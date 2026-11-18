@@ -595,3 +595,104 @@ test('table controls: shown only while editing (CSS contract) and focus is resto
   ed.destroy();
 });
 
+
+// ── BRE uses the same inline dialog as BREW (no window.prompt) ───────────────
+const dlg = () => document.querySelector('.bre-brew-link-dialog');
+const setVal = (d, v) => { const i = d.querySelector('input'); i.value = v; };
+
+test('BRE dialog: formula click opens the shared dialog; Save applies, Cancel keeps, Esc closes', async () => {
+  const host = mount();
+  let nativePrompts = 0;
+  const origPrompt = window.prompt; window.prompt = () => { nativePrompts++; return null; };
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } }]));
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  let d = dlg();
+  assert.ok(d, 'inline dialog opened');
+  assert.equal(d.getAttribute('role'), 'dialog');
+  assert.equal(d.querySelector('input').value, 'x', 'prefilled with the current LaTeX');
+  setVal(d, 'y^2');
+  d.querySelector('.bre-brew-link-save').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].data.latex, 'y^2');
+  assert.equal(dlg(), null, 'dialog removed');
+  // Cancel keeps the value
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  setVal(dlg(), 'zzz');
+  dlg().querySelector('.bre-brew-link-cancel').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].data.latex, 'y^2');
+  // Escape closes
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  fire(dlg(), 'keydown', { key: 'Escape' });
+  assert.equal(dlg(), null);
+  assert.equal(nativePrompts, 0, 'window.prompt is never used');
+  window.prompt = origPrompt;
+  ed.destroy();
+});
+
+test('BRE dialog: media replace validates the URL (aria-invalid, no alert) and applies a good one', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  fire(host.querySelector('.bre-image'), 'dblclick');
+  await tick(5);
+  const d = dlg();
+  assert.ok(d);
+  setVal(d, 'javascript:alert(1)');
+  d.querySelector('.bre-brew-link-save').click();
+  assert.equal(d.querySelector('input').getAttribute('aria-invalid'), 'true');
+  assert.ok(dlg(), 'stays open on an invalid URL');
+  setVal(d, 'https://example.com/b.png');
+  d.querySelector('.bre-brew-link-save').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].data.src, 'https://example.com/b.png');
+  ed.destroy();
+});
+
+test('BRE dialog: slash → Formula inserts via the dialog; cancel leaves a clean paragraph', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  const field = host.querySelector('[data-bre-field]');
+  field.textContent = '/';
+  fire(field, 'input');
+  field.textContent = '/formula';
+  fire(field, 'input');
+  fire(field, 'keydown', { key: 'Enter' });
+  await tick(5);
+  const d = dlg();
+  assert.ok(d, 'formula dialog opened from the slash menu');
+  setVal(d, 'E=mc^2');
+  d.querySelector('.bre-brew-link-save').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].type, 'formula');
+  assert.equal(ed.getJSON().blocks[0].data.latex, 'E=mc^2');
+  // second time: cancel → the "/formula" text is cleared
+  ed.setJSON(doc([para('p', '')]));
+  const f2 = host.querySelector('[data-bre-field]');
+  f2.textContent = '/';
+  fire(f2, 'input');
+  f2.textContent = '/formula';
+  fire(f2, 'input');
+  fire(f2, 'keydown', { key: 'Enter' });
+  await tick(5);
+  dlg().querySelector('.bre-brew-link-cancel').click();
+  await tick(10);
+  assert.equal(ed.getJSON().blocks[0].type, 'paragraph');
+  assert.equal(host.querySelector('[data-bre-field]').textContent, '');
+  ed.destroy();
+});
+
+test('BRE dialog: destroy closes an open dialog; options.prompt still overrides', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } }]));
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  assert.ok(dlg());
+  ed.destroy();
+  assert.equal(dlg(), null, 'no orphaned dialog after destroy');
+});

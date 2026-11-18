@@ -112,3 +112,7 @@ body {
 
 /* Sharp edges everywhere in the demo: buttons, selection outline, popups. */
 .bre-editor [data-bre-selected] { border-radius: 0; }
+
+/* Menus (slash + block menu): the active item matches the action buttons. */
+.bre-slash-item[data-active="true"] { background: #111827; color: #fff; }
+.bre-slash-item[data-active="true"] .bre-slash-item__desc { opacity: .75; }

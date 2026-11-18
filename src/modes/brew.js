@@ -18,6 +18,7 @@ import { generateId } from '../utils/id.js';
 import { escapeHTML } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { createDialogs } from '../ui/dialog.js';
 import { EventEmitter } from '../core/events.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 import { markdownToBlocks } from '../utils/markdown.js';
@@ -217,7 +218,13 @@ export function createBrewEditor(container, options = {}) {
   let destroyed = false;
   let changeTimer = null;
   let selRaf = null;
-  let activeDialog = null;
+  const dialogs = createDialogs({
+    getRoot: () => root,
+    messages,
+    fallbackEls: () => [toolbar, surface],
+    focusEl: () => surface,
+    isDestroyed: () => destroyed,
+  });
 
   let _docMeta = { id: generateId(), version: 1, created: Date.now(), updated: Date.now() };
 
@@ -850,118 +857,8 @@ export function createBrewEditor(container, options = {}) {
 
   // ── Dialogs ────────────────────────────────────────────────────────────────
 
-  /**
-   * Generic small inline dialog. Esc closes and returns focus (and selection)
-   * to the surface; Enter confirms. `fields`: [{ key, type, placeholder, value }].
-   * `onSave(values)` runs after `validate(values)` returns no invalid keys.
-   */
-  /**
-   * Place a dialog just below its anchor (an Element, Range, or the saved
-   * selection), clamped inside the editor. Without this an absolutely positioned
-   * dialog sits at the editor's top-left corner.
-   */
-  function positionDialog(dialog, anchor, atCorner, spanWidth) {
-    const rect = (a) => {
-      try { return a && a.getBoundingClientRect ? a.getBoundingClientRect() : null; } catch (_) { return null; }
-    };
-    let r = rect(anchor);
-    if (!r || (!r.width && !r.height)) r = rect(toolbar) || rect(surface); // collapsed range etc.
-    if (!r) return;
-    const rootRect = root.getBoundingClientRect();
-    // spanWidth: the dialog spans the block it edits (never narrower than a usable form).
-    if (spanWidth) dialog.style.width = Math.min(Math.max(r.width, 280), rootRect.width || r.width) + 'px';
-    // atCorner: dialog's top-left sits on the anchor's top-left; otherwise just below it.
-    const top = atCorner ? r.top - rootRect.top : r.bottom - rootRect.top + 6;
-    const maxLeft = Math.max(0, rootRect.width - (dialog.offsetWidth || 0));
-    const left = Math.max(0, Math.min(r.left - rootRect.left, maxLeft));
-    dialog.style.top = top + 'px';
-    dialog.style.left = left + 'px';
-  }
-
-  function openDialog({ className, label, fields, savedRange, anchor, atCorner, spanWidth, validate, onSave, onRemove }) {
-    if (activeDialog) activeDialog.close(false);
-
-    const dialog = document.createElement('div');
-    dialog.className = className;
-    dialog.setAttribute('role', 'dialog');
-    dialog.setAttribute('aria-label', label);
-
-    const inputs = {};
-    for (const f of fields) {
-      const input = document.createElement('input');
-      input.type = f.type || 'text';
-      input.placeholder = f.placeholder;
-      input.setAttribute('aria-label', f.placeholder);
-      input.value = f.value || '';
-      input.className = 'bre-brew-link-input';
-      dialog.appendChild(input);
-      inputs[f.key] = input;
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'bre-brew-link-actions';
-    const mk = (text, cls) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = text;
-      b.className = cls;
-      return b;
-    };
-    const saveBtn = mk(messages.save, 'bre-brew-link-save');
-    const cancelBtn = mk(messages.cancel, 'bre-brew-link-cancel');
-    if (onRemove) {
-      const removeBtn = mk(messages.remove, 'bre-brew-link-remove');
-      removeBtn.addEventListener('click', () => { close(true); onRemove(); });
-      actions.appendChild(removeBtn);
-    }
-    actions.append(cancelBtn, saveBtn);
-    dialog.appendChild(actions);
-
-    let outsideTimer = null;
-    const outside = (e) => { if (!dialog.contains(e.target)) close(false); };
-
-    function close(restoreFocus) {
-      clearTimeout(outsideTimer);
-      document.removeEventListener('mousedown', outside);
-      dialog.remove();
-      if (activeDialog && activeDialog.dialog === dialog) activeDialog = null;
-      if (restoreFocus && !destroyed) {
-        surface.focus();
-        if (savedRange) {
-          const s = window.getSelection();
-          s.removeAllRanges();
-          s.addRange(savedRange);
-        }
-      }
-    }
-
-    saveBtn.addEventListener('click', () => {
-      const values = {};
-      for (const k of Object.keys(inputs)) values[k] = inputs[k].value.trim();
-      for (const input of Object.values(inputs)) input.removeAttribute('aria-invalid');
-      const bad = validate ? validate(values) : [];
-      if (bad.length) {
-        for (const k of bad) inputs[k].setAttribute('aria-invalid', 'true');
-        inputs[bad[0]].focus();
-        return;
-      }
-      close(true);
-      onSave(values);
-    });
-    cancelBtn.addEventListener('click', () => close(true));
-    dialog.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
-      else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); saveBtn.click(); }
-    });
-
-    root.appendChild(dialog);
-    positionDialog(dialog, anchor || savedRange, atCorner, spanWidth);
-    // Deferred: the mousedown that opened the dialog is still bubbling.
-    outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
-    activeDialog = { dialog, close };
-    const first = Object.values(inputs)[0];
-    if (first) first.focus();
-  }
+  // Shared with BRE (src/ui/dialog.js): positioning, Esc/Enter, outside-click, focus return.
+  const openDialog = (cfg) => dialogs.open(cfg);
 
   function openLinkDialog({ text, url }, savedRange, onSave, onRemove, anchor) {
     openDialog({
@@ -1534,7 +1431,7 @@ export function createBrewEditor(container, options = {}) {
     if (readOnly) {
       toolbar.remove();
       root.setAttribute('data-bre-readonly', 'true');
-      if (activeDialog) activeDialog.close(false);
+      dialogs.closeActive(false);
     } else {
       root.removeAttribute('data-bre-readonly');
       root.insertBefore(toolbar, surface);
@@ -1668,7 +1565,7 @@ export function createBrewEditor(container, options = {}) {
     changeTimer = null;
     if (selRaf != null) cancelRaf(selRaf);
     selRaf = null;
-    if (activeDialog) activeDialog.close(false);
+    dialogs.closeActive(false);
     observer.disconnect();
     cleanups.forEach(fn => fn());
     cleanups.length = 0;

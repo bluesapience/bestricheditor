@@ -65,6 +65,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Numbered lists restart correctly after non-list blocks.
 
 ### Changed
+- **BRE input dialogs**: URL, link and formula entry use the same inline dialog as BREW (shared `src/ui/dialog.js`) instead of the browser's `window.prompt` — positioned at the block, validated inline (`aria-invalid`), keyboard friendly (Enter/Esc), and styleable. `options.prompt` still overrides it.
 - **Performance (BRE)**: structural-sharing state (O(1) undo snapshots, O(1) block lookup), no sanitizing on the keystroke path (lazy, per touched block), per-block HTML cache for `getHTML()`, one shared drag handle (2 elements per block instead of ~12), plain-text fast path (no DOMPurify for markup-free text), identity-based diff on undo/redo.
 - **BREM**: block→Markdown conversion has a DOM-free fast path for simple inline markup and the preview is built from a single sanitized fragment (5,000-block `setJSON`: ~2.6 s → ~0.4 s in jsdom).
 - **BREW**: incremental block model; `getJSON` / `getHTML` no longer re-walk the DOM.

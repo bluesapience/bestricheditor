@@ -163,8 +163,8 @@ export interface EditorOptionsBase {
   /** Block count above which 'auto' virtualization turns on. Default 300. */
   virtualizeThreshold?: number;
   /**
-   * Replace window.prompt for URL / formula input. Return the string (or null to
-   * cancel); may be async. BRE mode only.
+   * Replace the built-in inline input dialog (URL / formula entry). Return the
+   * string (or null to cancel); may be async. BRE mode only.
    */
   prompt?: (message: string, defaultValue: string) => string | null | Promise<string | null>;
   readOnly?: boolean;

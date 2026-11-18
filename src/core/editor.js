@@ -38,6 +38,7 @@ import { createSlashMenu } from '../ui/slashMenu.js';
 import { initDragHandles } from '../ui/dragHandle.js';
 import { createInlineToolbar } from '../ui/inlineToolbar.js';
 import { createBlockMenu } from '../ui/blockMenu.js';
+import { createDialogs } from '../ui/dialog.js';
 
 // Register all block types (side effects)
 import '../blocks/formula.js';
@@ -295,17 +296,35 @@ export function createEditor(container, options = {}) {
   }
   updatePlaceholder();
 
-  // ── Prompt helper (override with options.prompt) ───────────────────────────
-  async function ask(message, def = '') {
-    if (typeof opts.prompt === 'function') return opts.prompt(message, def);
-    const v = window.prompt(message, def);
-    return v;
+  // ── Input dialog (the same inline dialog BREW uses; override with options.prompt) ──
+  const dialogs = createDialogs({ getRoot: () => root, messages, isDestroyed: () => destroyed });
+
+  const urlValidator = (allowEmpty) => (v) => ((allowEmpty && v.v === '') || (v.v && sanitizeURL(v.v)) ? [] : ['v']);
+
+  /**
+   * Ask for one value. Resolves to the string, or null if cancelled.
+   * `where`: { anchor, atCorner, spanWidth, savedRange, validate } — dialog placement/validation.
+   */
+  function ask(message, def = '', where = {}) {
+    if (typeof opts.prompt === 'function') return Promise.resolve(opts.prompt(message, def));
+    return new Promise((resolve) => {
+      dialogs.open({
+        label: message,
+        fields: [{ key: 'v', placeholder: message, value: def }],
+        savedRange: where.savedRange,
+        anchor: where.anchor,
+        atCorner: where.atCorner,
+        spanWidth: where.spanWidth,
+        validate: where.validate,
+        onSave: (vals) => resolve(vals.v),
+        onCancel: () => resolve(null),
+      });
+    });
   }
 
   function reportInvalidUrl() {
     emitter.emit('error', { type: 'invalid-url', error: new Error(messages.invalidUrl) });
     announce(messages.invalidUrl);
-    if (typeof opts.prompt !== 'function') window.alert(messages.invalidUrl);
   }
 
   // Track the block that triggered the slash menu
@@ -446,7 +465,7 @@ export function createEditor(container, options = {}) {
       const blockEl = closestBlock(formulaEl);
       const block = blockEl && state.findBlockAnywhere(blockEl.getAttribute('data-bre-block-id')).block;
       if (!block || block.type !== 'formula') return;
-      const latex = await ask(messages.promptEditFormula, block.data.latex || '');
+      const latex = await ask(messages.promptEditFormula, block.data.latex || '', { anchor: renderer.getBlockEl(block.id), spanWidth: true });
       if (latex === null || latex === undefined) return;
       state.saveUndoSnapshot();
       replaceAnywhere(block.id, { ...block, data: { latex, displayMode: block.data.displayMode ?? true } });
@@ -581,7 +600,9 @@ export function createEditor(container, options = {}) {
     const msg = block.type === 'image' ? messages.promptImageUrl
       : block.type === 'audio' ? messages.promptAudioUrl
       : messages.promptVideoUrl;
-    const url = await ask(msg, block.data.src || '');
+    const url = await ask(msg, block.data.src || '', {
+      anchor: renderer.getBlockEl(block.id), atCorner: true, spanWidth: true, validate: urlValidator(true),
+    });
     if (url === null || url === undefined) return;
     const safe = url ? sanitizeURL(url) : '';
     if (url && !safe) { reportInvalidUrl(); return; }
@@ -1166,7 +1187,7 @@ export function createEditor(container, options = {}) {
     // Prompting steals the selection: remember it.
     const sel = window.getSelection();
     const saved = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
-    const url = await ask(messages.promptUrl);
+    const url = await ask(messages.promptUrl, '', { savedRange: saved, validate: urlValidator(false) });
     if (!url) return;
     const safe = sanitizeURL(url);
     if (!safe) { reportInvalidUrl(); return; }
@@ -1418,7 +1439,7 @@ export function createEditor(container, options = {}) {
         columns: Array.from({ length: item.colCount || 2 }, () => [makeBlock('paragraph', { html: '' })]),
       };
     } else if (item.type === 'formula') {
-      const latex = await ask(messages.promptFormula);
+      const latex = await ask(messages.promptFormula, '', { anchor: renderer.getBlockEl(targetId), spanWidth: true });
       if (!latex) { clearSlashText(targetId); return; }
       newData = { latex, displayMode: true };
     } else if (item.type === 'image' && typeof opts.uploadImage === 'function') {
@@ -1429,7 +1450,7 @@ export function createEditor(container, options = {}) {
     } else if (MEDIA_TYPES.has(item.type)) {
       const label = item.type === 'image' ? messages.promptImageUrl
         : item.type === 'audio' ? messages.promptAudioUrl : messages.promptVideoUrl;
-      const url = await ask(label);
+      const url = await ask(label, '', { anchor: renderer.getBlockEl(targetId), spanWidth: true, validate: urlValidator(false) });
       if (!url) { clearSlashText(targetId); return; }
       const safe = sanitizeURL(url);
       if (!safe) { reportInvalidUrl(); clearSlashText(targetId); return; }
@@ -1697,6 +1718,7 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('focusin', handleFocusIn);
     root.removeEventListener('focusout', handleFocusOut);
     document.removeEventListener('selectionchange', handleSelectionChange);
+    dialogs.closeActive(false);
     slashMenu.destroy();
     blockMenu.destroy();
     inlineToolbar.destroy();
