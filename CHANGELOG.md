@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-18
+
+### Upgrading from 0.4.x — read this first
+
+0.5.0 changes defaults and a few public surfaces. Check these:
+
+- **Styling (CSS).**
+  - The old theme variables are gone: `--bre-color-*`, `--bre-font-*`, `--bre-editor-max-width`, `--bre-editor-padding`. Your **content** (fonts, colors, headings, lists, quotes, code) now simply inherits from your page — nothing to configure.
+  - The editor's own UI (menus, popups, dialogs, buttons) has a neutral default look driven by a new, smaller variable set: `--bre-accent`, `--bre-accent-text`, `--bre-surface`, `--bre-border`, `--bre-radius` (now defaults to `0`, was `6px`), `--bre-shadow`, `--bre-pad`, `--bre-focus`, `--bre-gutter`, `--bre-tail`, `--bre-min-height`. Rough mapping: `--bre-color-accent` → `--bre-accent`, `--bre-color-bg` → `--bre-surface`, `--bre-color-border` → `--bre-border`.
+  - Want no default look? Import `bestricheditor/base.css` instead of `bestricheditor/dist/bre.css`.
+  - The BRE editor now reserves a small left gutter for the drag handle (`--bre-gutter`, default `1.75em`) and some space below the last block (`--bre-tail`). If you added your own left padding for the handle, remove it.
+- **KaTeX CSS is no longer injected from a CDN.** Add `import 'bestricheditor/katex.css'` (or pass `katexCssUrl`). KaTeX itself loads lazily, only when a formula is rendered.
+- **Bundlers:** the ESM build keeps `dompurify` and `katex` as external dependencies (your bundler dedupes them). No change for normal bundler use; a plain `<script type="module">` page needs an import map (see `demo/index.html`). The UMD/CDN build is unchanged for script-tag users but now lazy-loads `bre.katex.umd.js` from the same folder.
+- **`require()`:** CommonJS now loads `dist/bre.umd.cjs` (the package is `"type": "module"`); types for CJS are in `types/index.d.cts`.
+- **`virtualize` now defaults to `'auto'`** (on above 300 blocks). Find-in-page and printing only see rendered blocks while virtualized; pass `virtualize: false` to keep the old behaviour.
+- **`getJSON()` returns sanitized, read-only data:** treat the returned object as immutable (it is shared with undo history; repeat calls return the same object until something changes). `html` fields are sanitized, `data:` URIs are never allowed, media `src` must be `http(s)`, `mailto` or a relative URL, and block ids are limited to `[\w.:-]{1,128}`.
+- **Interaction changes:** a single click on a loaded image/audio/video now **selects** it (Delete removes it; double-click or the block menu replaces its source) instead of opening the URL prompt. URL, link and formula entry use an inline dialog instead of `window.prompt` (pass `prompt` to supply your own). Table controls appear only while editing a table.
+- **BRE DOM:** blocks are two elements (wrapper + content) with one shared drag handle; code relying on per-block `.bre-drag-handle` elements or the old `bre-block` structure needs updating. Custom block plugins now receive `render(block, ctx)`.
+
+
 ### Added
 - **Notion-style block selection and menu**: click image/audio/video/divider to select, `Backspace`/`Delete` removes; click the drag handle (or `Alt+Shift+M`) for a Replace / Duplicate / Delete menu; double-click media to replace. A single click on loaded media no longer opens the URL prompt (empty placeholders still do).
 - **BREW block deletion**: clicking an image/audio/video/divider selects it (`Backspace`/`Delete` removes it via the browser's undo-able delete, `Esc` deselects, `Enter` or double-click edits media); media and formula dialogs have a **Remove** button; tables have a **Delete table** button; formulas edit in a dialog instead of `window.prompt`.
