@@ -89,7 +89,8 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false, allowButton
   // and style attributes can smuggle url()/expression()). KaTeX output is the
   // one exception — it needs style for layout — and is scrubbed by a hook below.
   if (!allowKaTeX && !allowMedia) {
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style'], FORBID_TAGS: forbidTags, ...extra });
+    // id/name are dropped: they let content clobber window/document globals (DOM clobbering).
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_ATTR: ['style', 'id', 'name'], FORBID_TAGS: forbidTags, ...extra });
   }
 
   const addTags = allowKaTeX ? [...KATEX_TAGS] : [];
@@ -119,16 +120,22 @@ function runSanitize(html, { allowKaTeX = false, allowMedia = false, allowButton
 
   DOMPurify.addHook('afterSanitizeAttributes', hook);
 
-  const result = DOMPurify.sanitize(html, {
+  let result;
+  try {
+    result = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true, ...(allowKaTeX ? { svg: true, mathMl: true } : {}) },
     ADD_ATTR: addAttr,
     ADD_TAGS: addTags,
     FORBID_TAGS: forbidTags,
+    // Never let content's id/name clobber globals: DOMPurify prefixes them (user-content-…).
+    SANITIZE_NAMED_PROPS: true,
     ...(allowKaTeX ? {} : { FORBID_ATTR: ['style'] }),
     ...extra,
-  });
-
-  DOMPurify.removeHook('afterSanitizeAttributes');
+    });
+  } finally {
+    // Always unhook: the ESM build shares the host app's DOMPurify instance.
+    DOMPurify.removeHook('afterSanitizeAttributes');
+  }
 
   return result;
 }

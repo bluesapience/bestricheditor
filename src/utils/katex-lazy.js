@@ -23,10 +23,13 @@ const _selfSrc = (typeof document !== 'undefined' && document.currentScript && d
 function loadKaTeXScript() {
   return new Promise((resolve) => {
     const g = typeof window !== 'undefined' ? window : globalThis;
-    if (g.__BRE_KATEX__) return resolve(g.__BRE_KATEX__);
-    const override = _scriptUrl !== undefined ? _scriptUrl : g.BRE_KATEX_URL;
-    if (override === false || typeof document === 'undefined') return resolve(null);
-    let url = override;
+    // typeof checks: window.BRE_KATEX_URL / __BRE_KATEX__ can be DOM-clobbered by an
+    // element with a matching id/name, which must never become a script URL or module.
+    const isKatex = (k) => !!k && typeof k.renderToString === 'function';
+    if (isKatex(g.__BRE_KATEX__)) return resolve(g.__BRE_KATEX__);
+    const raw = _scriptUrl !== undefined ? _scriptUrl : g.BRE_KATEX_URL;
+    if (raw === false || typeof document === 'undefined') return resolve(null);
+    let url = typeof raw === 'string' ? raw : '';
     if (!url) {
       if (!_selfSrc) return resolve(null);
       url = _selfSrc.replace(/[^/]*(\?.*)?$/, 'bre.katex.umd.js');
@@ -34,7 +37,7 @@ function loadKaTeXScript() {
     const s = document.createElement('script');
     s.src = url;
     s.async = true;
-    s.onload = () => resolve(g.__BRE_KATEX__ || null);
+    s.onload = () => resolve(isKatex(g.__BRE_KATEX__) ? g.__BRE_KATEX__ : null);
     s.onerror = () => { console.warn('[bre] Could not load KaTeX from ' + url); resolve(null); };
     document.head.appendChild(s);
   });

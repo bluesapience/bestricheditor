@@ -19,6 +19,7 @@ import { escapeHTML } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
 import { createDialogs } from '../ui/dialog.js';
+import { cleanBlock } from '../utils/docHygiene.js';
 import { EventEmitter } from '../core/events.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 import { markdownToBlocks } from '../utils/markdown.js';
@@ -111,24 +112,60 @@ function escText(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const VOID_TAGS = new Set(['br', 'hr', 'img', 'wbr', 'source', 'track', 'col', 'area', 'input']);
+const RAW_TEXT_TAGS = new Set(['script', 'style', 'textarea', 'title', 'noscript', 'iframe', 'xmp', 'plaintext', 'template', 'svg', 'math']);
+
+/**
+ * True if every tag in the fragment is opened and closed in order, with nothing
+ * odd (comments, raw-text elements, stray '<'). Only such fragments are safe to
+ * batch: an unclosed <a> or <b> would otherwise swallow the NEXT block's content.
+ */
+function isBalanced(h) {
+  if (h.indexOf('<') === -1) return true;
+  const stack = [];
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^<>]*)?>/g;
+  let rest = h;
+  let m;
+  while ((m = re.exec(h)) !== null) {
+    const name = m[2].toLowerCase();
+    if (RAW_TEXT_TAGS.has(name)) return false;
+    rest = rest.replace(m[0], '');
+    if (m[1]) {
+      if (stack.pop() !== name) return false;
+    } else if (!VOID_TAGS.has(name) && !/\/>$/.test(m[0])) {
+      stack.push(name);
+    }
+  }
+  return stack.length === 0 && rest.indexOf('<') === -1;
+}
+
 /**
  * Sanitize many HTML fragments with ONE DOMPurify call (per-call overhead
- * dominates for big docs). Fragments are wrapped in <div>s; if the wrapper
- * structure doesn't survive (a fragment tried to break out) every fragment is
- * sanitized individually instead.
+ * dominates for big docs). Fragments are wrapped in <div>s. Only balanced
+ * fragments join the batch; anything else — and the whole batch if the wrapper
+ * structure doesn't survive — is sanitized individually, so one block's markup
+ * can never leak into, or consume, another block.
  */
 function sanitizeBatch(htmls, options) {
   const n = htmls.length;
   if (n === 0) return [];
-  const t = document.createElement('template');
-  t.innerHTML = sanitizeHTML(`<div>${htmls.join('</div><div>')}</div>`, options); // sanitized
-  const kids = Array.from(t.content.children);
-  if (kids.length === n && kids.every(k => k.nodeName === 'DIV')) {
-    const out = new Array(n);
-    for (let i = 0; i < n; i++) out[i] = kids[i].innerHTML;
-    return out;
+  const out = new Array(n);
+  const batchIdx = [];
+  for (let i = 0; i < n; i++) {
+    if (isBalanced(htmls[i])) batchIdx.push(i);
+    else out[i] = sanitizeHTML(htmls[i], options);
   }
-  return htmls.map(h => sanitizeHTML(h, options));
+  if (batchIdx.length) {
+    const t = document.createElement('template');
+    t.innerHTML = sanitizeHTML(`<div>${batchIdx.map(i => htmls[i]).join('</div><div>')}</div>`, options); // sanitized
+    const kids = Array.from(t.content.children);
+    if (kids.length === batchIdx.length && kids.every(k => k.nodeName === 'DIV')) {
+      batchIdx.forEach((i, k) => { out[i] = kids[k].innerHTML; });
+    } else {
+      for (const i of batchIdx) out[i] = sanitizeHTML(htmls[i], options);
+    }
+  }
+  return out;
 }
 
 /**
@@ -422,7 +459,7 @@ export function createBrewEditor(container, options = {}) {
           : (b.data && Array.isArray(b.data.children)) ? b.data.children : [];
         for (const col of cols) normalizeBlocks(Array.isArray(col) ? col : [], out);
       } else {
-        out.push(b);
+        out.push(cleanBlock(b));
       }
     }
     return out;

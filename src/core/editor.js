@@ -39,6 +39,7 @@ import { initDragHandles } from '../ui/dragHandle.js';
 import { createInlineToolbar } from '../ui/inlineToolbar.js';
 import { createBlockMenu } from '../ui/blockMenu.js';
 import { createDialogs } from '../ui/dialog.js';
+import { cleanBlock } from '../utils/docHygiene.js';
 
 // Register all block types (side effects)
 import '../blocks/formula.js';
@@ -1625,9 +1626,8 @@ export function createEditor(container, options = {}) {
         continue;
       }
       let nb = b;
-      if (typeof nb.id !== 'string' || !nb.data || typeof nb.data !== 'object') {
-        nb = { ...nb, id: typeof nb.id === 'string' ? nb.id : generateId(), data: nb.data && typeof nb.data === 'object' ? nb.data : {} };
-      }
+      if (!nb.data || typeof nb.data !== 'object') nb = { ...nb, data: {} };
+      nb = cleanBlock(nb); // safe id charset; media src must pass the URL policy
       if (nb.type === 'columns') {
         const raw = Array.isArray(nb.data.columns) ? nb.data.columns : Array.isArray(nb.data.children) ? nb.data.children : [[], []];
         let cols = raw.map((c) => { const o = []; normalizeBlocks(Array.isArray(c) ? c : [], o); if (!o.length) o.push(makeBlock('paragraph', { html: '' })); return o; });
