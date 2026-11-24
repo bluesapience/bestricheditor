@@ -23,6 +23,7 @@ import {
   setCursorOffset,
 } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
+import { imageFiles, pastedImages, splitFirst, uploadOne, pickImageFiles, trackFileDrag } from '../utils/imageUpload.js';
 import { setKaTeXCssUrl, ensureKaTeXStyles, getKaTeX, loadKaTeX } from '../utils/katex-lazy.js';
 import { cleanPastedHTML } from '../utils/pasteClean.js';
 import { markdownToBlocks } from '../utils/markdown.js';
@@ -127,6 +128,7 @@ export function createEditor(container, options = {}) {
   if (opts.placeholder == null) opts.placeholder = messages.placeholder;
 
   let readOnly = !!opts.readOnly;
+  let loadGen = 0; // bumped whenever a new document is loaded
   let destroyed = false;
 
   // ── Events ─────────────────────────────────────────────────────────────────
@@ -371,6 +373,7 @@ export function createEditor(container, options = {}) {
   root.addEventListener('dblclick', handleDblClick);
   root.addEventListener('drop', handleDrop);
   root.addEventListener('dragover', handleDragOver);
+  const untrackFileDrag = trackFileDrag(root, () => !readOnly);
   root.addEventListener('focusin', handleFocusIn);
   root.addEventListener('focusout', handleFocusOut);
   document.addEventListener('selectionchange', handleSelectionChange);
@@ -669,7 +672,7 @@ export function createEditor(container, options = {}) {
   async function setMediaSource(block) {
     // Image + upload hook → file picker.
     if (block.type === 'image' && typeof opts.uploadImage === 'function') {
-      const files = await pickFiles('image/*');
+      const files = await pickImageFiles(root);
       if (files.length) await uploadImages(files, block.id, true);
       return;
     }
@@ -1361,12 +1364,12 @@ export function createEditor(container, options = {}) {
     const cd = e.clipboardData;
 
     // Image files from the clipboard → upload hook.
-    if (typeof opts.uploadImage === 'function' && cd.files && cd.files.length) {
-      const imgs = Array.from(cd.files).filter(f => f.type.startsWith('image/'));
-      if (imgs.length) {
-        uploadImages(imgs, info.blockId, true);
-        return;
-      }
+    // Text wins over a picture on the clipboard (Excel/Word); a bare image is uploaded,
+    // or reported when no hook is set.
+    const pastedImgs = pastedImages(cd);
+    if (pastedImgs.length) {
+      uploadImages(pastedImgs, info.blockId, true);
+      return;
     }
 
     const html = cd.getData('text/html');
@@ -1423,13 +1426,16 @@ export function createEditor(container, options = {}) {
     const dt = e.dataTransfer;
     if (!dt) return;
 
-    const files = Array.from(dt.files || []).filter(f => f.type.startsWith('image/'));
+    const files = imageFiles(dt.files);
     if (files.length) {
       e.preventDefault();
-      if (typeof opts.uploadImage === 'function') {
-        const blockEl = e.target.closest ? closestBlock(e.target) : null;
-        uploadImages(files, blockEl ? blockEl.getAttribute('data-bre-block-id') : null, false);
+      const blockEl = e.target.closest ? closestBlock(e.target) : null;
+      let position = 'after';
+      if (blockEl && blockEl.getBoundingClientRect) {
+        const r = blockEl.getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) position = 'before';
       }
+      uploadImages(files, blockEl ? blockEl.getAttribute('data-bre-block-id') : null, false, position);
       return;
     }
     // Any other file: never let the browser navigate away from the page.
@@ -1465,63 +1471,71 @@ export function createEditor(container, options = {}) {
   }
 
   // ── Image upload ───────────────────────────────────────────────────────────
-  function pickFiles(accept) {
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = accept;
-      input.multiple = true;
-      input.hidden = true;
-      input.addEventListener('change', () => { resolve(Array.from(input.files || [])); input.remove(); });
-      input.addEventListener('cancel', () => { resolve([]); input.remove(); });
-      root.appendChild(input);
-      input.click();
-    });
-  }
-
   /**
-   * Upload images via options.uploadImage and insert them as image blocks.
+   * Upload ONE image (the first of `files`) via options.uploadImage and insert it
+   * as an image block. Extra files are ignored with a single error event.
    * @param {boolean} replaceTarget  replace the target block if it is an empty
    *   paragraph or an unset image block
+   * @param {'before'|'after'} position  where to insert relative to the anchor
    */
-  async function uploadImages(files, anchorId, replaceTarget) {
-    if (typeof opts.uploadImage !== 'function') return;
-    let after = anchorId;
+  async function uploadImages(files, anchorId, replaceTarget, position = 'after') {
+    if (destroyed || readOnly) return;
+    const { first, extra } = splitFirst(files);
+    if (!first) return;
+    const gen = loadGen; // a document loaded meanwhile must not receive this image
+    if (extra.length) emitter.emit('error', { type: 'upload', error: new Error(messages.uploadOneAtATime), file: extra[0] });
     let replaceId = null;
     if (replaceTarget && anchorId) {
       const b = state.findBlockAnywhere(anchorId).block;
       const emptyPara = b && b.type === 'paragraph' && !(b.data.html || b.data.text || '').replace(/<[^>]*>/g, '').trim();
       if (emptyPara || (b && b.type === 'image' && !b.data.src)) replaceId = anchorId;
     }
-    for (const file of files) {
-      announce(messages.uploading);
-      try {
-        const url = await opts.uploadImage(file);
-        if (destroyed) return;
-        const safe = sanitizeURL(url);
-        if (!safe) throw new Error(messages.invalidUrl);
-        state.saveUndoSnapshot();
-        const data = { src: safe, alt: file.name ? file.name.replace(/\.[^.]+$/, '') : '', caption: '' };
-        const existing = replaceId ? state.findBlockAnywhere(replaceId).block : null;
-        if (existing) {
-          // Reuse the id so the block is replaced in place (top-level or column).
-          const nb = { id: replaceId, type: 'image', data };
-          replaceAnywhere(replaceId, nb);
-          after = replaceId;
-          replaceId = null;
-        } else {
-          const nb = makeBlock('image', data);
-          const anchorOk = after && state.getBlock(after);
-          state.addBlock(nb, anchorOk ? after : null);
-          renderer.insertBlock(nb, anchorOk ? after : null);
-          after = nb.id;
+    if (typeof opts.uploadImage === 'function') announce(messages.uploading);
+    try {
+      const safe = await uploadOne(first, { hook: opts.uploadImage, maxSize: opts.uploadMaxSize, messages });
+      if (destroyed || readOnly || gen !== loadGen) return;
+      state.saveUndoSnapshot();
+      const data = { src: safe, alt: first.name ? first.name.replace(/\.[^.]+$/, '') : '', caption: '' };
+      const existing = replaceId ? state.findBlockAnywhere(replaceId).block : null;
+      if (existing) {
+        // Reuse the id so the block is replaced in place (top-level or column).
+        replaceAnywhere(replaceId, { id: replaceId, type: 'image', data });
+      } else {
+        const nb = makeBlock('image', data);
+        const found = anchorId ? state.findBlockAnywhere(anchorId) : null;
+        if (found && found.context) { // anchor lives inside a columns block: insert into that column
+          const { columnsBlockId, colIndex, indexInCol } = found.context;
+          const col = state.getBlock(columnsBlockId).data.columns[colIndex].slice();
+          col.splice(position === 'before' ? indexInCol : indexInCol + 1, 0, nb);
+          state.updateColumnBlock(columnsBlockId, colIndex, col);
+          renderer.updateBlock(state.getBlock(columnsBlockId));
+          updatePlaceholder();
+          notifyChange();
+          return;
         }
-        updatePlaceholder();
-        notifyChange();
-      } catch (error) {
-        emitter.emit('error', { type: 'upload', error, file });
-        announce(messages.uploadFailed);
+        const anchorOk = anchorId && state.getBlock(anchorId);
+        const blocks = state.getBlocks();
+        const idx = anchorOk ? blocks.findIndex(b => b.id === anchorId) : -1;
+        if (anchorOk && position === 'before' && idx > 0) {
+          const prevId = blocks[idx - 1].id;
+          state.addBlock(nb, prevId);
+          renderer.insertBlock(nb, prevId);
+        } else {
+          state.addBlock(nb, anchorOk ? anchorId : null);
+          renderer.insertBlock(nb, anchorOk ? anchorId : null);
+          if (anchorOk && position === 'before') { // anchor is the first block
+            state.moveBlock(1, 0);
+            const anchorEl = renderer.getBlockEl(anchorId), newEl = renderer.getBlockEl(nb.id);
+            if (anchorEl && newEl && anchorEl.parentNode) anchorEl.parentNode.insertBefore(newEl, anchorEl);
+          }
+        }
       }
+      updatePlaceholder();
+      notifyChange();
+    } catch (error) {
+      if (destroyed) return;
+      emitter.emit('error', { type: 'upload', error, file: first });
+      announce(messages.uploadFailed);
     }
   }
 
@@ -1545,7 +1559,7 @@ export function createEditor(container, options = {}) {
       newData = { latex, displayMode: true };
     } else if (item.type === 'image' && typeof opts.uploadImage === 'function') {
       clearSlashText(targetId);
-      const files = await pickFiles('image/*');
+      const files = await pickImageFiles(root);
       if (files.length) await uploadImages(files, targetId, true);
       return;
     } else if (MEDIA_TYPES.has(item.type)) {
@@ -1713,6 +1727,7 @@ export function createEditor(container, options = {}) {
    * or report what changed (strict mode / validateDocument / 'error' event). Notes in TODO.md.
    */
   function setJSON(doc) {
+    loadGen++;
     if (!doc || !Array.isArray(doc.blocks)) {
       console.warn('[bre] setJSON: invalid document');
       return;
@@ -1774,6 +1789,7 @@ export function createEditor(container, options = {}) {
   }
 
   function setHTML(html) {
+    loadGen++;
     if (typeof html !== 'string') return;
     const blocks = htmlToBlocks(html);
     const now = Date.now();
@@ -1823,6 +1839,7 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('dblclick', handleDblClick);
     root.removeEventListener('drop', handleDrop);
     root.removeEventListener('dragover', handleDragOver);
+    untrackFileDrag();
     root.removeEventListener('focusin', handleFocusIn);
     root.removeEventListener('focusout', handleFocusOut);
     document.removeEventListener('selectionchange', handleSelectionChange);

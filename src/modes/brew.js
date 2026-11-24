@@ -25,6 +25,7 @@ import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 import { markdownToBlocks } from '../utils/markdown.js';
 import { blockToHTML, isSimpleInlineHTML } from '../utils/blocksToHTML.js';
 import { cleanPastedHTML } from '../utils/pasteClean.js';
+import { imageFiles, pastedImages, splitFirst, uploadOne, altFromFile, pickImageFiles, trackFileDrag } from '../utils/imageUpload.js';
 
 // Ensure all block plugins are registered (same as editor.js)
 import '../blocks/paragraph.js';
@@ -65,6 +66,12 @@ export const DEFAULT_MESSAGES = {
   formula: 'Insert formula',
   table: 'Insert table',
   image: 'Insert image',
+  uploading: 'Uploading image…',
+  uploadFailed: 'Image upload failed',
+  uploadNotConfigured: 'Image upload is not configured',
+  uploadTooLarge: 'Image is too large',
+  uploadOneAtATime: 'Upload one image at a time',
+  invalidUrl: 'Invalid or unsafe URL.',
   audio: 'Insert audio',
   video: 'Insert video',
   linkDialog: 'Link',
@@ -243,7 +250,7 @@ export function createBrewEditor(container, options = {}) {
   const cleanups = [];
   for (const [ev, fn] of [
     ['change', opts.onChange], ['ready', opts.onReady], ['focus', opts.onFocus],
-    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange],
+    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange], ['error', opts.onError],
   ]) {
     if (typeof fn === 'function') cleanups.push(emitter.on(ev, fn));
   }
@@ -695,6 +702,8 @@ export function createBrewEditor(container, options = {}) {
     const seen = new Set();
     const units = [];
     const visit = (node, listTag) => {
+      // Upload placeholders are transient UI, never part of the document.
+      if (node.nodeType === 1 && node.hasAttribute('data-bre-upload')) return;
       let e = cache.get(node);
       if (!e || e.dirty || e.list !== listTag) {
         const block = readUnit(node, listTag);
@@ -903,8 +912,13 @@ export function createBrewEditor(container, options = {}) {
   const openDialog = (cfg) => dialogs.open(cfg);
 
   function openLinkDialog({ text, url }, savedRange, onSave, onRemove, anchor) {
+    // Like the formula dialog: just below the line, spanning the whole block it belongs to.
+    const at = anchor || (savedRange && savedRange.startContainer);
+    const el = at && at.nodeType === 3 ? at.parentNode : at;
+    const block = el && el.nodeType === 1 && surface.contains(el) ? topLevelBlockOf(el) : null;
     openDialog({
-      anchor,
+      anchor: block || anchor,
+      spanWidth: !!block,
       className: 'bre-brew-link-dialog',
       label: messages.linkDialog,
       savedRange,
@@ -1078,6 +1092,168 @@ export function createBrewEditor(container, options = {}) {
     }
   }
 
+  // ── Image upload ───────────────────────────────────────────────────────────
+  // One image per action. A transient placeholder (never serialized) marks the spot,
+  // then it is replaced by the image figure, or removed on failure / if the user deleted it.
+
+  const TEXT_BLOCK = /^(P|H[1-6]|BLOCKQUOTE)$/;
+
+  function caretRangeAt(x, y) {
+    let r = null;
+    try {
+      if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y);
+      else if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); }
+      }
+    } catch (_) { r = null; }
+    return r && surface.contains(r.startContainer) ? r : null;
+  }
+
+  /** Place `el` (a block element) at `range`, splitting a text block around the caret. */
+  function placeBlockAt(el, range) {
+    // A selected range is replaced by the image (like typing over a selection).
+    if (range && !range.collapsed && surface.contains(range.startContainer) && surface.contains(range.endContainer)) {
+      range.deleteContents();
+      range.collapse(true);
+    }
+    let top = range && range.startContainer;
+    while (top && top.parentNode !== surface) top = top.parentNode;
+    if (!top || !top.isConnected) { surface.appendChild(el); return; }
+    // A caret inside a non-editable atom (formula, upload placeholder, figure) must not be split:
+    // snap to after the block that holds it.
+    const at = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    if (at && at.closest && at.closest('[data-bre-upload], [contenteditable="false"], [data-bre-type="formula"]') &&
+        surface.contains(at) && at !== surface) { top.after(el); return; }
+    const hasContent = (n) => !!((n.textContent || '').trim() || (n.querySelector && n.querySelector('img, figure, [data-bre-type]')));
+    const isText = top.nodeType === 1 && TEXT_BLOCK.test(top.nodeName);
+    if (isText && !hasContent(top)) { surface.replaceChild(el, top); return; }
+    if (isText) {
+      const tail = document.createRange();
+      tail.setStart(range.startContainer, range.startOffset);
+      tail.setEndAfter(top.lastChild);
+      const frag = tail.extractContents();
+      const after = top.cloneNode(false);
+      after.removeAttribute('data-bre-id');
+      after.removeAttribute('data-bre-block-id');
+      after.appendChild(frag);
+      const headEmpty = !hasContent(top);
+      const tailEmpty = !hasContent(after);
+      if (headEmpty) { surface.replaceChild(el, top); } else { top.after(el); }
+      if (!tailEmpty) el.after(after);
+      return;
+    }
+    top.after(el);
+  }
+
+  // Upload undo. The browser's undo can't see our direct DOM writes, so each finished upload that is the
+  // most recent change keeps a before/after snapshot of the surface and handles Undo / Redo itself.
+  // Anything else (typing since, overlapping or failed uploads, a new document) is left to the browser.
+  const uploadUndo = { undo: [], redo: [] };
+  const MAX_UPLOAD_UNDO = 20;
+  let editGen = 0;       // bumped by user input and by loading a document
+  let uploadEpoch = 0;   // bumped when an upload starts
+  let uploadsActive = 0;
+  const snapshotSurface = () => Array.from(surface.childNodes, (n) => n.cloneNode(true));
+  function resetUploadUndo() { uploadUndo.undo.length = 0; uploadUndo.redo.length = 0; editGen++; }
+  function caretIn(el, atEnd) {
+    if (!el) return;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(!atEnd);
+    const sel = window.getSelection();
+    if (sel) { sel.removeAllRanges(); sel.addRange(r); }
+  }
+
+  /** Apply the most recent upload undo/redo entry. Returns false when there is none (browser handles it). */
+  function uploadHistory(redo) {
+    if (readOnly) return false;
+    const entry = (redo ? uploadUndo.redo : uploadUndo.undo).pop();
+    if (!entry) return false;
+    surface.replaceChildren(...(redo ? entry.after : entry.before).map((n) => n.cloneNode(true)));
+    (redo ? uploadUndo.undo : uploadUndo.redo).push(entry);
+    const kids = surface.children;
+    caretIn(redo ? kids[entry.figureIndex + 1] || kids[entry.figureIndex] : kids[entry.figureIndex - 1] || kids[0], !redo);
+    scheduleChange();
+    return true;
+  }
+
+  // The keyboard shortcut is caught on keydown: with an empty native history the browser fires no
+  // `beforeinput` at all. `beforeinput` still covers Edit → Undo in the browser menu.
+  listen(surface, 'keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = String(e.key).toLowerCase();
+    if ((k === 'z' || k === 'y') && uploadHistory(k === 'y' || e.shiftKey)) e.preventDefault();
+  });
+  listen(surface, 'beforeinput', (e) => {
+    if ((e.inputType === 'historyUndo' || e.inputType === 'historyRedo') && uploadHistory(e.inputType === 'historyRedo')) e.preventDefault();
+  });
+
+  async function uploadFiles(files, range) {
+    if (destroyed || readOnly) return;
+    const { first, extra } = splitFirst(files);
+    if (!first) return;
+    if (extra.length) emitter.emit('error', { type: 'upload', error: new Error(messages.uploadOneAtATime), file: extra[0] });
+    if (typeof opts.uploadImage !== 'function') {
+      emitter.emit('error', { type: 'upload', error: new Error(messages.uploadNotConfigured), file: first });
+      return;
+    }
+    const ph = document.createElement('p');
+    ph.className = 'bre-upload-placeholder';
+    ph.setAttribute('data-bre-upload', generateId());
+    ph.setAttribute('contenteditable', 'false');
+    ph.textContent = messages.uploading;
+    const solo = uploadsActive === 0;
+    const epoch = ++uploadEpoch;
+    const gen0 = editGen;
+    const before = solo ? snapshotSurface() : null;
+    uploadsActive++;
+    placeBlockAt(ph, range && range.startContainer && range.startContainer.isConnected ? range : null);
+    announce(messages.uploading);
+    scheduleChange();
+    try {
+      const src = await uploadOne(first, { hook: opts.uploadImage, maxSize: opts.uploadMaxSize, messages });
+      if (destroyed) return;
+      if (!ph.isConnected) return; // user removed it, or the document was replaced
+      if (readOnly) { ph.remove(); return; } // went read-only meanwhile: insert nothing
+      const id = generateId();
+      const node = snippetToNode(snippetFor({ type: 'image', data: { src, alt: altFromFile(first), caption: '' } }, id));
+      if (!node) throw new Error(messages.uploadFailed);
+      ph.replaceWith(node);
+      if (!node.nextElementSibling) {
+        const p = document.createElement('p');
+        p.appendChild(document.createElement('br'));
+        node.after(p);
+      }
+      if (before && epoch === uploadEpoch && gen0 === editGen) {
+        uploadUndo.undo.push({ before, after: snapshotSurface(), figureIndex: Array.prototype.indexOf.call(surface.children, node) });
+        if (uploadUndo.undo.length > MAX_UPLOAD_UNDO) uploadUndo.undo.shift();
+        uploadUndo.redo.length = 0;
+      }
+      scheduleChange();
+    } catch (error) {
+      if (destroyed) return;
+      ph.remove();
+      scheduleChange();
+      emitter.emit('error', { type: 'upload', error, file: first });
+      announce(messages.uploadFailed);
+    } finally {
+      uploadsActive--;
+    }
+  }
+
+  const hasFileDrag = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+  listen(root, 'dragover', (e) => { if (hasFileDrag(e)) e.preventDefault(); });
+  listen(root, 'drop', (e) => {
+    const dt = e.dataTransfer;
+    if (!dt || !(dt.files && dt.files.length)) return;
+    e.preventDefault(); // never let the browser navigate to, or paste, a dropped file
+    if (readOnly) return;
+    const imgs = imageFiles(dt.files);
+    if (imgs.length) uploadFiles(imgs, caretRangeAt(e.clientX, e.clientY) || currentRange());
+  });
+  cleanups.push(trackFileDrag(root, () => !readOnly));
+
   function insertMediaBlock(block) {
     const id = generateId();
     const snippet = snippetFor({ ...block, id }, id);
@@ -1109,10 +1285,15 @@ export function createBrewEditor(container, options = {}) {
   }
 
   for (const [btn, type] of [[btnImage, 'image'], [btnAudio, 'audio'], [btnVideo, 'video']]) {
-    const open = (e) => {
+    const open = async (e) => {
       e.preventDefault();
       if (readOnly) return;
       const savedRange = currentRange();
+      if (type === 'image' && typeof opts.uploadImage === 'function') {
+        const picked = await pickImageFiles(root);
+        if (picked.length) uploadFiles(picked, savedRange);
+        return;
+      }
       openMediaDialog({ src: '', alt: '', caption: '', type }, savedRange, ({ src, alt, caption }) => {
         insertMediaBlock({ type, data: { src, alt, caption } });
       });
@@ -1430,6 +1611,12 @@ export function createBrewEditor(container, options = {}) {
     if (readOnly || !e.clipboardData) return;
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
+    // Image files: upload (hook set) or report (bare image paste without a hook).
+    const pastedImgs = pastedImages(e.clipboardData); // text wins over a picture on the clipboard
+    if (pastedImgs.length) {
+      uploadFiles(pastedImgs, currentRange());
+      return;
+    }
     if (html && html.trim()) {
       const safe = sanitizeHTML(cleanPastedHTML(html)); // DOMPurify after cleaning
       if (safe.replace(/<[^>]*>/g, '').trim() || /<img\b/i.test(safe)) {
@@ -1444,6 +1631,7 @@ export function createBrewEditor(container, options = {}) {
 
   listen(root, 'input', (e) => {
     if (!surface.contains(e.target)) return; // ignore dialog inputs
+    resetUploadUndo(); // the user edited: the browser's undo owns history from here
     // Keep the surface truly :empty when blank so the placeholder CSS can match.
     if (surface.childNodes.length === 1) {
       const n = surface.firstChild;
@@ -1563,6 +1751,7 @@ export function createBrewEditor(container, options = {}) {
       console.warn('[bre] BREW setJSON: ' + messages.invalidDocument);
       return;
     }
+    resetUploadUndo();
     clearTimeout(changeTimer);
     changeTimer = null;
     _docMeta = {

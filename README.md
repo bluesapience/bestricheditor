@@ -147,7 +147,8 @@ createEditor(container, {
 | `virtualize` | `'auto' \| boolean` | `'auto'` | Virtualized rendering for large documents (BRE) |
 | `readOnly` | `boolean` | `false` | Render without editing affordances |
 | `placeholder` | `string` | - | Placeholder text for empty content |
-| `uploadImage` | `(file: File) => Promise<string>` | - | Called for pasted/dropped/picked images; resolve with the final URL |
+| `uploadImage` | `(file: File) => Promise<string>` | - | Enables image upload in BRE, BREW and BREM; resolve with the final URL. See [Image upload](#image-upload) |
+| `uploadMaxSize` | `number` | - | Largest image in bytes; bigger files are rejected before `uploadImage` runs |
 | `katexCssUrl` | `string` | - | Opt-in: inject this KaTeX stylesheet URL (nothing is injected otherwise) |
 | `messages` | `Partial<Record<string,string>>` | built-in English | Override UI strings |
 | `dir` | `'ltr' \| 'rtl' \| 'auto'` | - | Text direction |
@@ -155,6 +156,133 @@ createEditor(container, {
 TypeScript definitions ship in `types/index.d.ts`.
 
 ---
+
+## Image upload
+
+Image upload is **off until you give the editor an upload function**. The library has no backend and never embeds files as `data:` or `blob:` URLs, so your app does the actual upload and returns the final URL:
+
+```js
+createEditor(el, {
+  mode: 'BREW', // or 'BRE' / 'BREM'
+  uploadImage: async (file) => {
+    // upload `file` somewhere, then resolve its public URL
+    return 'https://cdn.example.com/photos/' + file.name;
+  },
+  uploadMaxSize: 5 * 1024 * 1024, // optional: bytes; larger files are rejected before your function runs
+  onError: ({ type, error, file }) => { if (type === 'upload') console.warn(error.message, file?.name); },
+});
+```
+
+| Mode | How a user adds an image | Where it goes |
+| --- | --- | --- |
+| **BRE** | Slash menu → *Image* (file picker), paste, or drop | Above or below the block under the pointer (upper half / lower half) |
+| **BREW** | Toolbar image button (file picker), paste, or drop | At the caret / drop point; a paragraph is split around it |
+| **BREM** | Drop or paste into the textarea | At the cursor: `![Uploading photo.png…]()` appears at once and becomes `![photo](https://…)` when the upload finishes (removed on failure) |
+
+Rules, the same in every mode:
+
+- **One image per action.** A drop, paste or pick uploads the first image only; the others are ignored and one extra `error` event reports them (so an action can emit two errors if the first image also fails). Separate actions may overlap.
+- **Text wins when pasting.** If the clipboard carries text as well as a picture (copying cells from Excel or Word does this), the text is pasted and nothing is uploaded. A bare image, or a copied web image, is uploaded.
+- Only `image/*` files are uploaded. The URL you return is sanitized (`http:`, `https:` and `mailto:` only), so a `javascript:` or `data:` URL is rejected like any other failure.
+- **Without `uploadImage`**, nothing changes for the user (the URL dialogs still work), but a dropped or pasted image file is ignored and an `error` event (`type: 'upload'`) tells you why.
+- A rejected promise, a thrown error, a non-string result, an unsafe URL or an oversize file all count as failures: the placeholder disappears, `onError` fires for that failure, and the document is left as it was. A result that arrives after the editor was destroyed, loaded another document or went read-only is discarded.
+- While an upload runs, BREW's placeholder is never part of `getJSON()` / `getHTML()` / `onChange`. In BREM the placeholder is ordinary text, so it is in the Markdown until the upload finishes.
+- Dragging files over the editor sets `data-bre-dragover="true"` on its root.
+- Add `connect-src` for your upload host to your [Content Security Policy](#content-security-policy) if you use one.
+
+### Recipes
+
+These are plain functions you copy into your app; the editor ships no storage SDKs.
+
+**Firebase Storage (with the Firebase SDK)**
+
+```js
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+const storage = getStorage();
+const uploadImage = async (file) => {
+  const path = `images/${crypto.randomUUID()}-${file.name}`;
+  const snap = await uploadBytes(ref(storage, path), file, { contentType: file.type });
+  return getDownloadURL(snap.ref);
+};
+```
+
+**Firebase Storage (REST, no SDK)**
+
+```js
+const BUCKET = 'my-app.appspot.com';
+
+const uploadImage = async (file) => {
+  const name = `images/${crypto.randomUUID()}-${file.name}`;
+  const idToken = await getIdToken(); // your auth; drop the header if your rules allow public writes
+  const res = await fetch(
+    `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o?name=${encodeURIComponent(name)}`,
+    { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Firebase ${idToken}` }, body: file },
+  );
+  if (!res.ok) throw new Error('Upload failed: ' + res.status);
+  const { name: saved, downloadTokens } = await res.json();
+  return `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/${encodeURIComponent(saved)}?alt=media&token=${downloadTokens}`;
+};
+```
+
+**Amazon S3 (presigned URL)**
+
+S3 requests must be signed with a secret key, which can never ship to a browser. Your server signs a short-lived upload URL; the browser uploads straight to S3.
+
+```js
+// Browser
+const uploadImage = async (file) => {
+  const res = await fetch('/api/s3-presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: file.name, type: file.type }),
+  });
+  if (!res.ok) throw new Error('Could not get an upload URL');
+  const { uploadUrl, url } = await res.json();
+  const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+  if (!put.ok) throw new Error('Upload failed: ' + put.status);
+  return url; // the public (or CDN) URL of the object
+};
+```
+
+```js
+// Server (Node, Express-style) — validate the type and who is asking before signing
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
+
+const s3 = new S3Client({ region: 'us-east-1' });
+const Bucket = 'my-bucket';
+
+app.post('/api/s3-presign', async (req, res) => {
+  const { name, type } = req.body;
+  if (typeof type !== 'string' || !type.startsWith('image/')) return res.status(400).end();
+  const Key = `images/${randomUUID()}-${String(name).replace(/[^\w.-]/g, '_')}`;
+  const uploadUrl = await getSignedUrl(s3, new PutObjectCommand({ Bucket, Key, ContentType: type }), { expiresIn: 60 });
+  res.json({ uploadUrl, url: `https://${Bucket}.s3.us-east-1.amazonaws.com/${Key}` });
+});
+```
+
+The bucket needs a CORS rule that allows your site to `PUT`:
+
+```json
+[{ "AllowedOrigins": ["https://your-app.example"], "AllowedMethods": ["PUT"], "AllowedHeaders": ["*"], "MaxAgeSeconds": 3000 }]
+```
+
+**Your own endpoint (multipart)**
+
+```js
+const uploadImage = async (file) => {
+  const body = new FormData();
+  body.append('file', file);
+  const res = await fetch('/api/upload', { method: 'POST', body, credentials: 'include' });
+  if (!res.ok) throw new Error('Upload failed: ' + res.status);
+  const { url } = await res.json(); // your server answers { "url": "https://…" }
+  return url;
+};
+```
+
+Pass any of these as `uploadImage`.
 
 ## API
 
@@ -407,6 +535,7 @@ Set them on `:root` (the slash menu, block menu and floating toolbar are attache
 | `--bre-gutter` | left space for the drag handle (BRE) | `1.75em` |
 | `--bre-min-height` | writing-area height (all modes) | `300px` |
 | `--bre-tail` | clickable space below the last block (click it to add a line at the end) | `3em` |
+| `--bre-list-indent` | left indent of bulleted / numbered lists in BREW and BREM (keeps markers inside the editor under a CSS reset) | `2em` |
 
 ### Or just write CSS
 

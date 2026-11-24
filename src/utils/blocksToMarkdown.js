@@ -43,7 +43,7 @@ function wrap(open, inner, close) {
   return m[1] + open + m[2] + close + m[3];
 }
 
-function encodeUrl(url) {
+export function encodeUrl(url) {
   return String(url).replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29');
 }
 

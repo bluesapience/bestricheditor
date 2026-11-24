@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- **Image upload in all three modes.** `uploadImage(file) => Promise<string>` now also works in BREW (toolbar picker, drop and paste at the caret) and BREM (drop/paste at the cursor with a `![Uploading …]()` placeholder that becomes the real image). BRE drops now land above or below the block under the pointer, including inside a columns block. One image per drop, paste or pick; extra files are ignored with a single `error` event. New `uploadMaxSize` option, `data-bre-dragover` marker while files are dragged over the editor, and README recipes for Firebase Storage, S3 and a generic endpoint. BREW and BREM now accept `onError`. In BREW, Undo / Redo (Cmd/Ctrl+Z, Shift+Z) now removes and restores an uploaded image (and the paragraph split) as long as it was the last change; after you type, the browser's own undo takes over.
+
+### Fixed
+- **BRE lists** now look like BREW and BREM lists: the same `--bre-list-indent` (default `2em`), markers hanging to the left of the text, and the same gap after the bullet or number. Numbered items also no longer show a stray bullet next to the number.
+- **BREW and BREM lists** no longer hang outside the editor's left edge when the host page resets list padding (`* { padding: 0 }`): lists get a `--bre-list-indent` (default `2em`) in `bre.css`.
+
+### Changed
+- **BREW link dialog** (insert and edit) now opens just below its line and spans the block's width, like the formula dialog.
+- Dropping or pasting an image file with no `uploadImage` is ignored and reported through `error` (`type: 'upload'`) instead of being swallowed silently.
+- **Headerless tables** (`hasHeader: false`) are preserved by the HTML importer and in BRE, BREW and BREM.
+- BREM computes the sanitized preview once per Markdown revision and shares it with `getHTML()`; `blocksToMarkdown` handles plain links without a DOM parse.
+
 ## [0.5.0] - 2026-11-18
 
 ### Upgrading from 0.4.x — read this first

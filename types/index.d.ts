@@ -171,8 +171,13 @@ export interface EditorOptionsBase {
   prompt?: (message: string, defaultValue: string) => string | null | Promise<string | null>;
   readOnly?: boolean;
   placeholder?: string;
-  /** Upload hook for pasted/dropped/picked images; resolve with the final URL. */
+  /**
+   * Enables image upload (BRE, BREW and BREM): called for dropped, pasted and picked images, one image per
+   * action. Resolve with the final http(s) URL; reject to report a failure via `onError`.
+   */
   uploadImage?: (file: File) => Promise<string>;
+  /** Largest allowed image, in bytes. Larger files are rejected before `uploadImage` runs. */
+  uploadMaxSize?: number;
   /** Opt-in URL of a KaTeX stylesheet to inject. Nothing is injected by default. */
   katexCssUrl?: string;
   messages?: Messages;

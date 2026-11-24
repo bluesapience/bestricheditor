@@ -980,3 +980,160 @@ test('a11y: block menu exposes the active item via aria-activedescendant', () =>
   fire(menu, 'keydown', { key: 'Escape' });
   ed.destroy();
 });
+
+// ── Image upload: rules shared with BREW / BREM ─────────────────────────────
+const imgFile = (name = 'pic.png', body = 'x') => new window.File([body], name, { type: 'image/png' });
+const dropFiles = (el, files, props = {}) => fire(el, 'drop', { dataTransfer: { files, types: ['Files'] }, ...props });
+const blockEl = (host, id) => host.querySelector(`[data-bre-block-id="${id}"]`);
+const rectAt = (el) => { el.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100, left: 0, right: 100, width: 100 }); };
+
+test('BRE upload: drop of an image with no hook is swallowed and reported', async () => {
+  const host = mount();
+  const errs = [];
+  const ed = createEditor(host, { mode: 'BRE', onError: (e) => errs.push(e.type) });
+  ed.setJSON(doc([para('p1', 'one')]));
+  const e = dropFiles(blockEl(host, 'p1'), [imgFile()]);
+  await tick(10);
+  assert.ok(e.defaultPrevented);
+  assert.deepEqual(errs, ['upload']);
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  ed.destroy();
+});
+
+test('BRE upload: pasting a bare image file with no hook is reported, not inserted', async () => {
+  const host = mount();
+  const errs = [];
+  const ed = createEditor(host, { mode: 'BRE', onError: (e) => errs.push(e.type) });
+  fire(host.querySelector('[data-bre-field]'), 'paste', { clipboardData: { files: [imgFile()], getData: () => '' } });
+  await tick(10);
+  assert.deepEqual(errs, ['upload']);
+  assert.equal(ed.getJSON().blocks[0].type, 'paragraph');
+  ed.destroy();
+});
+
+test('BRE upload: uploadMaxSize rejects before the hook runs', async () => {
+  const host = mount();
+  const errs = []; let called = 0;
+  const ed = createEditor(host, { mode: 'BRE', uploadMaxSize: 3, uploadImage: async () => { called++; return 'https://e.com/a.png'; }, onError: (e) => errs.push(e.type) });
+  ed.setJSON(doc([para('p1', 'one')]));
+  dropFiles(blockEl(host, 'p1'), [imgFile('big.png', '12345')]);
+  await tick(10);
+  assert.equal(called, 0);
+  assert.deepEqual(errs, ['upload']);
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  ed.destroy();
+});
+
+test('BRE upload: a drop in the upper half inserts before the block, the lower half after', async () => {
+  for (const [clientY, expected] of [[10, ['image', 'paragraph']], [90, ['paragraph', 'image']]]) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://cdn.example.com/p.png' });
+    ed.setJSON(doc([para('p1', 'one')]));
+    const el = blockEl(host, 'p1');
+    rectAt(el);
+    dropFiles(el, [imgFile()], { clientY });
+    await tick(20);
+    assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), expected, 'clientY ' + clientY);
+    ed.destroy();
+  }
+});
+
+test('BRE upload: several files in one drop upload only the first and report once', async () => {
+  const host = mount();
+  const calls = [], errs = [];
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async (f) => { calls.push(f.name); return 'https://cdn.example.com/' + f.name; }, onError: (e) => errs.push(e.file && e.file.name) });
+  ed.setJSON(doc([para('p1', 'one')]));
+  dropFiles(blockEl(host, 'p1'), [imgFile('a.png'), imgFile('b.png'), imgFile('c.png')]);
+  await tick(20);
+  assert.deepEqual(calls, ['a.png']);
+  assert.deepEqual(errs, ['b.png']);
+  assert.equal(ed.getJSON().blocks.filter((b) => b.type === 'image').length, 1);
+  ed.destroy();
+});
+
+test('BRE upload: the root is marked while files are dragged over it', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://e.com/a.png' });
+  const root = host.querySelector('.bre-editor') || host.firstElementChild;
+  fire(root, 'dragenter', { dataTransfer: { types: ['Files'] } });
+  assert.equal(root.getAttribute('data-bre-dragover'), 'true');
+  fire(root, 'drop', { dataTransfer: { files: [], types: ['Files'] } });
+  assert.equal(root.hasAttribute('data-bre-dragover'), false);
+  ed.destroy();
+});
+
+test('BRE upload: destroy() or setJSON() while an upload is pending does not throw', async () => {
+  for (const act of ['destroy', 'setJSON']) {
+    const host = mount();
+    let release; const gate = new Promise((r) => { release = r; });
+    const errs = [];
+    const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => { await gate; return 'https://cdn.example.com/p.png'; }, onError: (e) => errs.push(e.type) });
+    ed.setJSON(doc([para('p1', 'one')]));
+    dropFiles(blockEl(host, 'p1'), [imgFile()]);
+    await tick(5);
+    if (act === 'destroy') ed.destroy(); else ed.setJSON(doc([para('q1', 'two')]));
+    release();
+    await tick(20);
+    assert.deepEqual(errs, [], act);
+    if (act === 'setJSON') { assert.equal(ed.getJSON().blocks.some((b) => b.type === 'image'), false, 'a late result must not land in the newly loaded document'); ed.destroy(); }
+  }
+});
+
+test('BRE upload: a result arriving after setReadOnly(true) is not inserted', async () => {
+  const host = mount();
+  let release; const gate = new Promise((r) => { release = r; });
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => { await gate; return 'https://cdn.example.com/p.png'; } });
+  ed.setJSON(doc([para('p1', 'one')]));
+  dropFiles(blockEl(host, 'p1'), [imgFile()]);
+  await tick(5);
+  ed.setReadOnly(true);
+  release(); await tick(20);
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  ed.destroy();
+});
+
+test('BRE upload: pasting files together with text pastes the text, not a screenshot', async () => {
+  const host = mount();
+  let called = 0;
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => { called++; return 'https://cdn.example.com/p.png'; } });
+  fire(host.querySelector('[data-bre-field]'), 'paste', { clipboardData: { files: [imgFile()], getData: (t) => (t === 'text/plain' ? 'a\tb' : '') } });
+  await tick(20);
+  assert.equal(called, 0);
+  assert.ok(!ed.getJSON().blocks.some((b) => b.type === 'image'));
+  ed.destroy();
+});
+
+test('BRE upload: a drop onto a block inside a column inserts the image in that column', async () => {
+  for (const [clientY, expected] of [[90, ['c1', 'IMG', 'c2']], [10, ['IMG', 'c1', 'c2']]]) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://cdn.example.com/p.png' });
+    ed.setJSON(doc([
+      { id: 'cols', type: 'columns', data: { columns: [[para('c1', 'a'), para('c2', 'b')], [para('d1', 'x')]] } },
+      para('after', 'end'),
+    ]));
+    const el = blockEl(host, 'c1');
+    assert.ok(el, 'column child is rendered with its block id');
+    rectAt(el);
+    dropFiles(el, [imgFile()], { clientY });
+    await tick(20);
+    const blocks = ed.getJSON().blocks;
+    assert.deepEqual(blocks.map((b) => b.id === 'cols' ? 'cols' : b.id), ['cols', 'after'], 'top level untouched');
+    const col0 = blocks[0].data.columns[0].map((b) => (b.type === 'image' ? 'IMG' : b.id));
+    assert.deepEqual(col0, expected, 'clientY ' + clientY);
+    assert.equal(blocks[0].data.columns[1].length, 1, 'other column untouched');
+    ed.destroy();
+  }
+});
+
+test('BRE upload: a column drop can be undone', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://cdn.example.com/p.png' });
+  ed.setJSON(doc([{ id: 'cols', type: 'columns', data: { columns: [[para('c1', 'a')], [para('d1', 'x')]] } }]));
+  const el = blockEl(host, 'c1'); rectAt(el);
+  dropFiles(el, [imgFile()], { clientY: 90 });
+  await tick(20);
+  assert.equal(ed.getJSON().blocks[0].data.columns[0].length, 2);
+  fire(host.querySelector('[data-bre-field]'), 'keydown', { key: 'z', ctrlKey: true });
+  assert.equal(ed.getJSON().blocks[0].data.columns[0].length, 1);
+  ed.destroy();
+});

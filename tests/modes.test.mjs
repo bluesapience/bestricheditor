@@ -704,3 +704,692 @@ test('headerless table survives BRE → BREM → BREW', () => {
   assert.equal(brew.getJSON().blocks.find((b) => b.type === 'table').data.hasHeader, false);
   bre.destroy(); brem.destroy(); brew.destroy();
 });
+
+// ── BREM image upload ───────────────────────────────────────────────────────
+const upFile = (name = 'pic.png', body = 'x') => new window.File([body], name, { type: 'image/png' });
+const dropOn = (el, files) => ev(el, 'drop', { dataTransfer: { files, types: ['Files'] } });
+const pasteOn = (el, files, text = '') => ev(el, 'paste', { clipboardData: { files, getData: (t) => (t === 'text/plain' ? text : '') } });
+const gate = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release }; };
+function bremUp(extra = {}, text = 'hello world', caret = 6) {
+  const host = mount();
+  const errs = [], changes = [];
+  const ed = createEditor(host, { mode: 'BREM', onError: (e) => errs.push(e), onChange: (d) => changes.push(d), ...extra });
+  ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'm', type: 'markdown', data: { markdown: text } }] });
+  host.querySelector('.bre-brem-toggle').click(); // enter edit mode
+  const ta = host.querySelector('textarea');
+  ta.setSelectionRange(caret, caret);
+  return { host, ed, ta, errs, changes, md: () => ed.getJSON().blocks[0].data.markdown };
+}
+
+test('BREM upload: a dropped image becomes a placeholder at the caret, then the real image', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.ta, [upFile()]);
+  assert.equal(t.ta.value, 'hello ![Uploading pic.png…]()world');
+  assert.equal(t.md(), t.ta.value);
+  g.release();
+  await tick(20);
+  assert.equal(t.ta.value, 'hello ![pic](https://cdn.example.com/pic.png)world');
+  assert.equal(t.md(), t.ta.value);
+  await tick(350);
+  assert.equal(t.changes.length >= 1, true, 'a change event fired');
+  assert.match(t.changes[t.changes.length - 1].blocks[0].data.markdown, /!\[pic\]\(https:\/\/cdn\.example\.com\/pic\.png\)/);
+  t.ed.destroy();
+});
+
+test('BREM upload: a selection is replaced by the placeholder', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } }, 'hello world', 0);
+  t.ta.setSelectionRange(0, 5);
+  dropOn(t.ta, [upFile()]);
+  assert.equal(t.ta.value, '![Uploading pic.png…]() world');
+  g.release(); await tick(20);
+  t.ed.destroy();
+});
+
+test('BREM upload: pasting an image file uploads it; pasting text is untouched', async () => {
+  const t = bremUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  const textPaste = pasteOn(t.ta, [], 'plain');
+  assert.equal(textPaste.defaultPrevented, false);
+  const e = pasteOn(t.ta, [upFile()]);
+  assert.ok(e.defaultPrevented);
+  await tick(20);
+  assert.equal(t.ta.value, 'hello ![pic](https://cdn.example.com/pic.png)world');
+  t.ed.destroy();
+});
+
+test('BREM upload: two separate drops of same-named files get distinct placeholders and land correctly', async () => {
+  const gates = [gate(), gate()]; let n = 0;
+  const t = bremUp({ uploadImage: async () => { const i = n++; await gates[i].p; return 'https://cdn.example.com/' + i + '.png'; } }, 'a|b', 1);
+  dropOn(t.ta, [upFile('same.png')]);
+  t.ta.setSelectionRange(t.ta.value.length, t.ta.value.length);
+  dropOn(t.ta, [upFile('same.png')]);
+  const phs = t.ta.value.match(/!\[Uploading[^\]]*\]\(\)/g);
+  assert.equal(phs.length, 2);
+  assert.notEqual(phs[0], phs[1]);
+  gates[1].release(); await tick(20);
+  gates[0].release(); await tick(20);
+  assert.equal(t.ta.value, 'a![same](https://cdn.example.com/0.png)|b![same](https://cdn.example.com/1.png)');
+  t.ed.destroy();
+});
+
+test('BREM upload: several files in one drop upload only the first and report once', async () => {
+  const calls = [];
+  const t = bremUp({ uploadImage: async (f) => { calls.push(f.name); return 'https://cdn.example.com/' + f.name; } });
+  dropOn(t.ta, [upFile('a.png'), upFile('b.png'), upFile('c.png')]);
+  await tick(20);
+  assert.deepEqual(calls, ['a.png']);
+  assert.equal(t.errs.length, 1);
+  assert.equal(t.errs[0].file.name, 'b.png');
+  assert.equal((t.ta.value.match(/!\[/g) || []).length, 1);
+  t.ed.destroy();
+});
+
+test('BREM upload: a placeholder the user deleted discards the result silently', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.ta, [upFile()]);
+  t.ta.value = 'completely new text';
+  ev(t.ta, 'input');
+  g.release(); await tick(20);
+  assert.equal(t.ta.value, 'completely new text');
+  assert.equal(t.errs.length, 0);
+  t.ed.destroy();
+});
+
+test('BREM upload: text typed around the placeholder is kept', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.ta, [upFile()]);
+  t.ta.value = 'AAA ' + t.ta.value + ' ZZZ';
+  ev(t.ta, 'input');
+  g.release(); await tick(20);
+  assert.equal(t.ta.value, 'AAA hello ![pic](https://cdn.example.com/pic.png)world ZZZ');
+  assert.equal(t.md(), t.ta.value);
+  t.ed.destroy();
+});
+
+test('BREM upload: every failure removes the placeholder and reports one error', async () => {
+  const hooks = [
+    async () => { throw new Error('boom'); },
+    async () => undefined,
+    async () => 'javascript:alert(1)',
+    async () => 'data:image/png;base64,AAAA',
+  ];
+  for (const uploadImage of hooks) {
+    const t = bremUp({ uploadImage });
+    dropOn(t.ta, [upFile()]);
+    await tick(20);
+    assert.equal(t.ta.value, 'hello world');
+    assert.equal(t.errs.length, 1);
+    assert.equal(t.errs[0].type, 'upload');
+    t.ed.destroy();
+  }
+  const big = bremUp({ uploadMaxSize: 3, uploadImage: async () => 'https://cdn.example.com/a.png' });
+  dropOn(big.ta, [upFile('big.png', '12345')]);
+  await tick(20);
+  assert.equal(big.ta.value, 'hello world');
+  assert.equal(big.errs.length, 1);
+  big.ed.destroy();
+});
+
+test('BREM upload: awkward file names still produce exactly one valid image', async () => {
+  for (const name of ['a](b).png', 'my photo (1).png', '日本語.png', '😀 party.png', 'x'.repeat(300) + '.png']) {
+    const t = bremUp({ uploadImage: async () => 'https://cdn.example.com/p.png' });
+    dropOn(t.ta, [upFile(name)]);
+    await tick(20);
+    const html = t.ed.getHTML();
+    assert.equal((html.match(/<img\b/g) || []).length, 1, name);
+    assert.match(html, /src="https:\/\/cdn\.example\.com\/p\.png"/, name);
+    t.ed.destroy();
+  }
+});
+
+test('BREM upload: with no hook an image drop or paste is swallowed and reported', async () => {
+  const t = bremUp({});
+  const d = dropOn(t.ta, [upFile()]);
+  const p = pasteOn(t.ta, [upFile()]);
+  await tick(10);
+  assert.ok(d.defaultPrevented && p.defaultPrevented);
+  assert.equal(t.errs.length, 2);
+  assert.equal(t.ta.value, 'hello world');
+  t.ed.destroy();
+});
+
+test('BREM upload: dropping on the preview enters edit mode and appends on its own line', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREM', uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'm', type: 'markdown', data: { markdown: 'first line' } }] });
+  dropOn(host.querySelector('.bre-brem-preview'), [upFile()]);
+  const ta = host.querySelector('textarea');
+  assert.equal(ta.hidden, false, 'edit mode');
+  assert.equal(ta.value, 'first line\n![Uploading pic.png…]()');
+  await tick(20);
+  assert.equal(ta.value, 'first line\n![pic](https://cdn.example.com/pic.png)');
+  ed.destroy();
+});
+
+test('BREM upload: destroy() while pending and read-only are safe', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.ta, [upFile()]);
+  t.ed.destroy();
+  g.release(); await tick(20);
+  assert.equal(t.errs.length, 0);
+
+  const roHost = mount();
+  const roErrs = []; let called = 0;
+  const ro = createEditor(roHost, { mode: 'BREM', readOnly: true, onError: (x) => roErrs.push(x), uploadImage: async () => { called++; return 'https://cdn.example.com/pic.png'; } });
+  ro.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'm', type: 'markdown', data: { markdown: 'fixed' } }] });
+  const e = dropOn(roHost.querySelector('.bre-brem-preview'), [upFile()]);
+  await tick(10);
+  assert.ok(e.defaultPrevented, 'the browser must not navigate to the dropped file');
+  assert.equal(called, 0);
+  assert.equal(roErrs.length, 0);
+  assert.equal(ro.getJSON().blocks[0].data.markdown, 'fixed');
+  ro.destroy();
+});
+
+test('BREM upload: the root is marked while files are dragged over it', () => {
+  const t = bremUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  const root = t.host.querySelector('.bre-editor--brem');
+  ev(root, 'dragenter', { dataTransfer: { types: ['Files'] } });
+  assert.equal(root.getAttribute('data-bre-dragover'), 'true');
+  dropOn(root, []);
+  assert.equal(root.hasAttribute('data-bre-dragover'), false);
+  t.ed.destroy();
+});
+
+// ── BREW image upload ───────────────────────────────────────────────────────
+function brewUp(extra = {}, html = 'hello world', offset = 5) {
+  const host = mount();
+  const errs = [];
+  const ed = createEditor(host, { mode: 'BREW', onError: (e) => errs.push(e), ...extra });
+  ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'p', type: 'paragraph', data: { html } }] });
+  const surface = host.querySelector('.bre-brew-surface');
+  const text = surface.querySelector('p').firstChild;
+  const r = document.createRange();
+  r.setStart(text, offset); r.collapse(true);
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  const types = () => ed.getJSON().blocks.map((b) => b.type);
+  return { host, ed, surface, errs, types };
+}
+
+test('BREW upload: a dropped image splits the paragraph at the caret and never serializes the placeholder', async () => {
+  const g = gate();
+  const t = brewUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  const e = dropOn(t.surface, [upFile()]);
+  assert.ok(e.defaultPrevented);
+  assert.ok(t.surface.querySelector('[data-bre-upload]'), 'placeholder shown while uploading');
+  assert.deepEqual(t.types(), ['paragraph', 'paragraph'], 'placeholder is not in the model');
+  assert.doesNotMatch(t.ed.getHTML(), /Uploading/);
+  g.release(); await tick(20);
+  assert.equal(t.surface.querySelector('[data-bre-upload]'), null);
+  assert.deepEqual(t.types(), ['paragraph', 'image', 'paragraph']);
+  const blocks = t.ed.getJSON().blocks;
+  assert.equal(blocks[0].data.html, 'hello');
+  assert.equal(blocks[1].data.src, 'https://cdn.example.com/pic.png');
+  assert.equal(blocks[1].data.alt, 'pic');
+  assert.equal(blocks[2].data.html, ' world');
+  t.ed.destroy();
+});
+
+test('BREW upload: pasting an image file uploads it at the selection; text paste is untouched', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  const e = pasteOn(t.surface, [upFile()]);
+  assert.ok(e.defaultPrevented);
+  await tick(20);
+  assert.deepEqual(t.types(), ['paragraph', 'image', 'paragraph']);
+  t.ed.destroy();
+});
+
+test('BREW upload: the toolbar image button opens a single-select picker when a hook is set', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  ev(t.host.querySelector('[data-bre-cmd="image"], button[aria-label="Insert image"]'), 'mousedown');
+  const input = t.host.querySelector('input[type="file"]');
+  assert.ok(input, 'file picker opened');
+  assert.equal(input.hasAttribute('multiple'), false);
+  Object.defineProperty(input, 'files', { value: [upFile()] });
+  input.dispatchEvent(new window.Event('change'));
+  await tick(20);
+  assert.deepEqual(t.types(), ['paragraph', 'image', 'paragraph']);
+  t.ed.destroy();
+});
+
+test('BREW upload: without a hook the toolbar image button still opens the URL dialog', () => {
+  const t = brewUp({});
+  ev(t.host.querySelector('[data-bre-cmd="image"], button[aria-label="Insert image"]'), 'mousedown');
+  assert.equal(t.host.querySelector('input[type="file"]'), null);
+  assert.ok(t.host.querySelector('[role="dialog"]'), 'URL dialog');
+  t.ed.destroy();
+});
+
+test('BREW upload: every failure removes the placeholder and reports one error', async () => {
+  const hooks = [async () => { throw new Error('boom'); }, async () => undefined, async () => 'javascript:alert(1)', async () => 'data:image/png;base64,AAAA'];
+  for (const uploadImage of hooks) {
+    const t = brewUp({ uploadImage });
+    dropOn(t.surface, [upFile()]);
+    await tick(20);
+    assert.equal(t.surface.querySelector('[data-bre-upload]'), null);
+    assert.equal(t.errs.length, 1);
+    assert.equal(t.errs[0].type, 'upload');
+    assert.ok(!t.types().includes('image'));
+    t.ed.destroy();
+  }
+  const big = brewUp({ uploadMaxSize: 3, uploadImage: async () => 'https://cdn.example.com/a.png' });
+  dropOn(big.surface, [upFile('big.png', '12345')]);
+  await tick(20);
+  assert.equal(big.errs.length, 1);
+  assert.ok(!big.types().includes('image'));
+  big.ed.destroy();
+});
+
+test('BREW upload: a placeholder the user removed discards the result', async () => {
+  const g = gate();
+  const t = brewUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.surface, [upFile()]);
+  t.surface.querySelector('[data-bre-upload]').remove();
+  g.release(); await tick(20);
+  assert.ok(!t.types().includes('image'));
+  assert.equal(t.errs.length, 0);
+  t.ed.destroy();
+});
+
+test('BREW upload: with no hook an image drop or bare paste is swallowed and reported', async () => {
+  const t = brewUp({});
+  const d = dropOn(t.surface, [upFile()]);
+  const p = pasteOn(t.surface, [upFile()]);
+  await tick(10);
+  assert.ok(d.defaultPrevented && p.defaultPrevented);
+  assert.equal(t.errs.length, 2);
+  assert.deepEqual(t.types(), ['paragraph']);
+  t.ed.destroy();
+});
+
+test('BREW upload: several files in one drop upload only the first and report once', async () => {
+  const calls = [];
+  const t = brewUp({ uploadImage: async (f) => { calls.push(f.name); return 'https://cdn.example.com/' + f.name; } });
+  dropOn(t.surface, [upFile('a.png'), upFile('b.png'), upFile('c.png')]);
+  await tick(20);
+  assert.deepEqual(calls, ['a.png']);
+  assert.equal(t.errs.length, 1);
+  assert.equal(t.errs[0].file.name, 'b.png');
+  assert.equal(t.types().filter((x) => x === 'image').length, 1);
+  t.ed.destroy();
+});
+
+test('BREW upload: destroy() or setJSON() while pending does not throw or insert stale content', async () => {
+  for (const act of ['destroy', 'setJSON']) {
+    const g = gate();
+    const t = brewUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+    dropOn(t.surface, [upFile()]);
+    if (act === 'destroy') t.ed.destroy();
+    else t.ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'q', type: 'paragraph', data: { html: 'new' } }] });
+    g.release(); await tick(20);
+    assert.equal(t.errs.length, 0, act);
+    if (act === 'setJSON') { assert.deepEqual(t.types(), ['paragraph']); t.ed.destroy(); }
+  }
+});
+
+test('BREW upload: read-only swallows the drop without uploading', async () => {
+  let called = 0;
+  const t = brewUp({ readOnly: true, uploadImage: async () => { called++; return 'https://cdn.example.com/pic.png'; } });
+  const e = dropOn(t.surface, [upFile()]);
+  await tick(10);
+  assert.ok(e.defaultPrevented);
+  assert.equal(called, 0);
+  assert.equal(t.errs.length, 0);
+  t.ed.destroy();
+});
+
+test('BREW upload: the root is marked while files are dragged over it', () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  const root = t.host.querySelector('.bre-editor--brew');
+  ev(root, 'dragenter', { dataTransfer: { types: ['Files'] } });
+  assert.equal(root.getAttribute('data-bre-dragover'), 'true');
+  dropOn(root, []);
+  assert.equal(root.hasAttribute('data-bre-dragover'), false);
+  t.ed.destroy();
+});
+
+// ── Review fixes ────────────────────────────────────────────────────────────
+const pasteMixed = (el, files, html, text) => ev(el, 'paste', { clipboardData: { files, getData: (t) => (t === 'text/html' ? html : t === 'text/plain' ? text : '') } });
+
+test('BREM upload: pasting files together with text pastes the text; an <img>-only clipboard uploads', async () => {
+  let called = 0;
+  const t = bremUp({ uploadImage: async () => { called++; return 'https://cdn.example.com/pic.png'; } });
+  const textPaste = pasteMixed(t.ta, [upFile()], '<table><tr><td>1</td></tr></table>', '1');
+  assert.equal(textPaste.defaultPrevented, false);
+  await tick(10);
+  assert.equal(called, 0);
+  const imgPaste = pasteMixed(t.ta, [upFile()], '<img src="https://e.com/a.png">', '');
+  assert.ok(imgPaste.defaultPrevented);
+  await tick(20);
+  assert.equal(called, 1);
+  t.ed.destroy();
+});
+
+test('BREM upload: a result arriving in read-only mode inserts nothing and leaves no placeholder', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.ta, [upFile()]);
+  t.ed.setReadOnly(true);
+  g.release(); await tick(20);
+  assert.equal(t.md(), 'hello world');
+  t.ed.destroy();
+});
+
+test('BREW upload: pasting files together with text does not upload', async () => {
+  let called = 0;
+  const t = brewUp({ uploadImage: async () => { called++; return 'https://cdn.example.com/pic.png'; } });
+  pasteMixed(t.surface, [upFile()], '<table><tr><td>1</td></tr></table>', '1');
+  await tick(20);
+  assert.equal(called, 0);
+  assert.equal(t.surface.querySelector('[data-bre-upload]'), null);
+  t.ed.destroy();
+});
+
+test('BREW upload: a result arriving in read-only mode inserts nothing and leaves no placeholder', async () => {
+  const g = gate();
+  const t = brewUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  dropOn(t.surface, [upFile()]);
+  t.ed.setReadOnly(true);
+  g.release(); await tick(20);
+  assert.ok(!t.types().includes('image'));
+  assert.equal(t.surface.querySelector('[data-bre-upload]'), null);
+  t.ed.destroy();
+});
+
+test('BREW upload: dropping inside a formula does not duplicate the formula', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW', uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'f', type: 'formula', data: { latex: 'a+b+c', displayMode: true } }] });
+  const surface = host.querySelector('.bre-brew-surface');
+  const span = surface.querySelector('[data-bre-type="formula"]');
+  // Plain text before KaTeX loads, nested KaTeX markup after: use the first text node either way.
+  const textNode = document.createTreeWalker(span, window.NodeFilter.SHOW_TEXT).nextNode();
+  const r = document.createRange(); r.setStart(textNode, Math.min(1, textNode.length)); r.collapse(true);
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  dropOn(surface, [upFile()]);
+  await tick(20);
+  const types = ed.getJSON().blocks.map((b) => b.type);
+  assert.equal(types.filter((x) => x === 'formula').length, 1, 'formula stays single: ' + types);
+  assert.equal(types.filter((x) => x === 'image').length, 1);
+  ed.destroy();
+});
+
+test('BREW upload: a second drop onto a placeholder never leaves an orphan fragment', async () => {
+  const gates = [gate(), gate()]; let n = 0;
+  const t = brewUp({ uploadImage: async () => { const i = n++; await gates[i].p; return 'https://cdn.example.com/' + i + '.png'; } });
+  dropOn(t.surface, [upFile('one.png')]);
+  const ph = t.surface.querySelector('[data-bre-upload]');
+  const r = document.createRange(); r.setStart(ph.firstChild, 4); r.collapse(true);
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  dropOn(t.surface, [upFile('two.png')]);
+  gates[0].release(); gates[1].release(); await tick(30);
+  assert.equal(t.surface.querySelector('[data-bre-upload]'), null, 'no placeholder left behind');
+  assert.equal(t.types().filter((x) => x === 'image').length, 2);
+  t.ed.destroy();
+});
+
+test('BREW upload: splitting a paragraph keeps an inline image next to the caret', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/new.png' }, '<img src="https://example.com/inline.png" alt="">text', 0);
+  const p = t.surface.querySelector('p');
+  const r = document.createRange(); r.setStart(p, 1); r.collapse(true); // right after the <img>
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  dropOn(t.surface, [upFile()]);
+  await tick(20);
+  const srcs = Array.from(t.surface.querySelectorAll('img')).map((i) => i.getAttribute('src'));
+  assert.ok(srcs.includes('https://example.com/inline.png'), 'inline image survives: ' + srcs);
+  assert.ok(srcs.includes('https://cdn.example.com/new.png'));
+  t.ed.destroy();
+});
+
+// ── Deferred-minor fixes ────────────────────────────────────────────────────
+test('BREM upload: "$" sequences in a file name appear verbatim in the placeholder', () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/p.png'; } });
+  dropOn(t.ta, [upFile("x$'y$&z$`w.png")]);
+  assert.ok(t.ta.value.includes("![Uploading x$'y$&z$`w.png…]()"), t.ta.value);
+  g.release();
+  t.ed.destroy();
+});
+
+test('BREM upload: a backtick in the file name cannot break the image', async () => {
+  const t = bremUp({ uploadImage: async () => 'https://cdn.example.com/p.png' }, 'see `x and ', 11);
+  dropOn(t.ta, [upFile('we`ird.png')]);
+  await tick(20);
+  const html = t.ed.getHTML();
+  assert.equal((html.match(/<img\b/g) || []).length, 1, html);
+  t.ed.destroy();
+});
+
+test('BREM upload: the user\'s selection survives the placeholder swap', async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/p.png'; } });
+  dropOn(t.ta, [upFile()]);
+  const start = t.ta.value.indexOf('world');
+  t.ta.setSelectionRange(start, start + 5);
+  g.release(); await tick(20);
+  assert.equal(t.ta.value.slice(t.ta.selectionStart, t.ta.selectionEnd), 'world');
+  t.ed.destroy();
+});
+
+test('BREW upload: a selected range is replaced by the pasted image', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/p.png' }, 'hello world', 0);
+  const text = t.surface.querySelector('p').firstChild;
+  const r = document.createRange(); r.setStart(text, 3); r.setEnd(text, 8); // "lo wo"
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  pasteOn(t.surface, [upFile()]);
+  await tick(20);
+  const blocks = t.ed.getJSON().blocks;
+  assert.deepEqual(blocks.filter((b) => b.type !== 'image').map((b) => b.data.html), ['hel', 'rld']);
+  t.ed.destroy();
+});
+
+// ── BREM upload keeps native undo (execCommand while focused) ───────────────
+// jsdom has no editing commands, so emulate the two the editor uses on the textarea.
+function withEditingCommands(fn) {
+  const orig = document.execCommand;
+  const calls = [];
+  document.execCommand = (cmd, _ui, val) => {
+    const ta = document.activeElement;
+    if (!ta || ta.tagName !== 'TEXTAREA') return false;
+    calls.push({ cmd, val, selected: ta.value.slice(ta.selectionStart, ta.selectionEnd) });
+    if (cmd === 'insertText') ta.setRangeText(val, ta.selectionStart, ta.selectionEnd, 'end');
+    else if (cmd === 'delete') ta.setRangeText('', ta.selectionStart, ta.selectionEnd, 'end');
+    else return false;
+    ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+    return true;
+  };
+  return Promise.resolve(fn(calls)).finally(() => { document.execCommand = orig; });
+}
+
+test('BREM upload: while focused, the placeholder and its swap go through insertText (undo-friendly)', () => withEditingCommands(async (calls) => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  t.ta.focus();
+  t.ta.setSelectionRange(6, 6);
+  dropOn(t.ta, [upFile()]);
+  assert.equal(t.ta.value, 'hello ![Uploading pic.png…]()world');
+  assert.equal(t.md(), t.ta.value, 'model follows the textarea');
+  g.release(); await tick(20);
+  assert.equal(t.ta.value, 'hello ![pic](https://cdn.example.com/pic.png)world');
+  assert.equal(t.md(), t.ta.value);
+  assert.deepEqual(calls.map((c) => c.cmd), ['insertText', 'insertText']);
+  assert.equal(calls[1].selected, '![Uploading pic.png…]()', 'the swap replaces exactly the placeholder');
+  t.ed.destroy();
+}));
+
+test('BREM upload: a failure while focused removes the placeholder with the delete command', () => withEditingCommands(async (calls) => {
+  const t = bremUp({ uploadImage: async () => { throw new Error('boom'); } });
+  t.ta.focus();
+  t.ta.setSelectionRange(6, 6);
+  dropOn(t.ta, [upFile()]);
+  await tick(20);
+  assert.equal(t.ta.value, 'hello world');
+  assert.equal(t.md(), 'hello world');
+  assert.equal(calls[calls.length - 1].cmd, 'delete');
+  assert.equal(calls[calls.length - 1].selected, '![Uploading pic.png…]()');
+  t.ed.destroy();
+}));
+
+test('BREM upload: when the textarea is not focused the swap writes directly and never steals focus', () => withEditingCommands(async (calls) => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  t.ta.focus();
+  dropOn(t.ta, [upFile()]);
+  const before = calls.length;
+  t.ta.blur();
+  g.release(); await tick(20);
+  assert.equal(calls.length, before, 'no editing command while unfocused');
+  assert.equal(t.ta.value, 'hello ![pic](https://cdn.example.com/pic.png)world');
+  assert.notEqual(document.activeElement, t.ta);
+  t.ed.destroy();
+}));
+
+test('BREM upload: the user\'s selection survives a focused insertText swap', () => withEditingCommands(async () => {
+  const g = gate();
+  const t = bremUp({ uploadImage: async () => { await g.p; return 'https://cdn.example.com/pic.png'; } });
+  t.ta.focus();
+  dropOn(t.ta, [upFile()]);
+  const start = t.ta.value.indexOf('world');
+  t.ta.setSelectionRange(start, start + 5);
+  g.release(); await tick(20);
+  assert.equal(t.ta.value.slice(t.ta.selectionStart, t.ta.selectionEnd), 'world');
+  t.ed.destroy();
+}));
+
+// ── BREW: Cmd+Z / Redo for an upload (the browser can't see our DOM writes) ──
+const history = (el, inputType) => { const e = new window.Event('beforeinput', { bubbles: true, cancelable: true }); e.inputType = inputType; el.dispatchEvent(e); return e; };
+const brewSnapshot = (t) => t.ed.getJSON().blocks.map((b) => b.type + ':' + (b.data.html ?? b.data.src ?? ''));
+
+test('BREW upload undo: Undo removes the image and restores the split paragraph; Redo brings it back', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  const original = brewSnapshot(t);
+  dropOn(t.surface, [upFile()]);
+  await tick(20);
+  const withImage = brewSnapshot(t);
+  assert.deepEqual(t.types(), ['paragraph', 'image', 'paragraph']);
+
+  const undo = history(t.surface, 'historyUndo');
+  assert.ok(undo.defaultPrevented, 'handled by the editor');
+  assert.deepEqual(brewSnapshot(t), original);
+  assert.equal(t.surface.querySelector('[data-bre-upload]'), null);
+
+  const redo = history(t.surface, 'historyRedo');
+  assert.ok(redo.defaultPrevented);
+  assert.deepEqual(brewSnapshot(t), withImage);
+  t.ed.destroy();
+});
+
+test('BREW upload undo: once the user types, Undo is left to the browser', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  dropOn(t.surface, [upFile()]);
+  await tick(20);
+  ev(t.surface.querySelector('p'), 'input'); // the user typed something
+  assert.equal(history(t.surface, 'historyUndo').defaultPrevented, false);
+  t.ed.destroy();
+});
+
+test('BREW upload undo: failed and overlapping uploads leave no editor-handled undo entry', async () => {
+  const failed = brewUp({ uploadImage: async () => { throw new Error('boom'); } });
+  dropOn(failed.surface, [upFile()]);
+  await tick(20);
+  assert.equal(history(failed.surface, 'historyUndo').defaultPrevented, false);
+  failed.ed.destroy();
+
+  const gates = [gate(), gate()]; let n = 0;
+  const two = brewUp({ uploadImage: async () => { const i = n++; await gates[i].p; return 'https://cdn.example.com/' + i + '.png'; } });
+  dropOn(two.surface, [upFile('a.png')]);
+  dropOn(two.surface, [upFile('b.png')]);
+  gates[0].release(); gates[1].release(); await tick(30);
+  assert.equal(history(two.surface, 'historyUndo').defaultPrevented, false, 'overlapping uploads: no stale snapshots');
+  assert.equal(two.surface.querySelector('[data-bre-upload]'), null);
+  two.ed.destroy();
+});
+
+test('BREW upload undo: a new document drops the entries; later Undo is the browser\'s', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  dropOn(t.surface, [upFile()]);
+  await tick(20);
+  t.ed.setJSON({ id: 'd', version: 1, created: 1, updated: 1, blocks: [{ id: 'q', type: 'paragraph', data: { html: 'new' } }] });
+  assert.equal(history(t.surface, 'historyUndo').defaultPrevented, false);
+  assert.deepEqual(brewSnapshot(t), ['paragraph:new']);
+  t.ed.destroy();
+});
+
+test('BREW upload undo: a second upload after the first can be undone on its own', async () => {
+  const t = brewUp({ uploadImage: async (f) => 'https://cdn.example.com/' + f.name });
+  dropOn(t.surface, [upFile('one.png')]);
+  await tick(20);
+  const afterOne = brewSnapshot(t);
+  const last = t.surface.querySelector('p:last-of-type');
+  const r = document.createRange(); r.selectNodeContents(last); r.collapse(false);
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  dropOn(t.surface, [upFile('two.png')]);
+  await tick(20);
+  assert.equal(t.types().filter((x) => x === 'image').length, 2);
+  assert.ok(history(t.surface, 'historyUndo').defaultPrevented);
+  assert.deepEqual(brewSnapshot(t), afterOne);
+  t.ed.destroy();
+});
+
+test('BREW upload undo: Ctrl/Cmd+Z and Shift+Z (keydown) work even with no native history', async () => {
+  const t = brewUp({ uploadImage: async () => 'https://cdn.example.com/pic.png' });
+  const original = brewSnapshot(t);
+  dropOn(t.surface, [upFile()]);
+  await tick(20);
+  const withImage = brewSnapshot(t);
+  const undo = ev(t.surface, 'keydown', { key: 'z', ctrlKey: true });
+  assert.ok(undo.defaultPrevented);
+  assert.deepEqual(brewSnapshot(t), original);
+  const redo = ev(t.surface, 'keydown', { key: 'z', metaKey: true, shiftKey: true });
+  assert.ok(redo.defaultPrevented);
+  assert.deepEqual(brewSnapshot(t), withImage);
+  // nothing left to undo: the keystroke is not intercepted
+  ev(t.surface, 'keydown', { key: 'z', ctrlKey: true });
+  assert.equal(ev(t.surface, 'keydown', { key: 'z', ctrlKey: true }).defaultPrevented, false);
+  t.ed.destroy();
+});
+
+// ── BREW: the link dialog is laid out like the formula dialog ───────────────
+function stubLinkLayout(host) {
+  host.querySelector('.bre-editor').getBoundingClientRect = () => ({ top: 100, bottom: 900, left: 50, right: 850, width: 800, height: 800 });
+  const block = host.querySelector('.bre-brew-surface p');
+  block.getBoundingClientRect = () => ({ top: 160, bottom: 200, left: 50, right: 850, width: 800, height: 40 });
+  return block;
+}
+
+test('BREW: editing an existing link opens a dialog just below its line, spanning the block width', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([{ id: 'p', type: 'paragraph', data: { html: 'see <a href="https://example.com/">this link</a> now' } }]));
+  stubLinkLayout(host);
+  const a = host.querySelector('.bre-brew-surface a');
+  a.getBoundingClientRect = () => ({ top: 170, bottom: 190, left: 300, right: 360, width: 60, height: 20 });
+  ev(a, 'click');
+  const dlg = host.querySelector('.bre-brew-link-dialog');
+  assert.ok(dlg, 'link dialog opened');
+  assert.equal(dlg.style.width, '800px', 'block width, not the link width');
+  assert.equal(dlg.style.top, '106px', 'just below the line: block bottom 200 - root top 100 + 6');
+  assert.equal(dlg.style.left, '0px');
+  ed.destroy();
+});
+
+test('BREW: adding a link from the toolbar opens the same full-width dialog under the current line', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREW' });
+  ed.setJSON(doc([{ id: 'p', type: 'paragraph', data: { html: 'select this text please' } }]));
+  stubLinkLayout(host);
+  const text = host.querySelector('.bre-brew-surface p').firstChild;
+  const r = document.createRange(); r.setStart(text, 7); r.setEnd(text, 11);
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  ev(host.querySelector('button[aria-label="Insert link"]'), 'mousedown');
+  const dlg = host.querySelector('.bre-brew-link-dialog');
+  assert.ok(dlg, 'link dialog opened');
+  assert.equal(dlg.style.width, '800px');
+  assert.equal(dlg.style.top, '106px');
+  assert.equal(dlg.querySelector('input').value, 'this', 'selected text prefilled');
+  ed.destroy();
+});

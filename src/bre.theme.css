@@ -24,6 +24,7 @@
  *   --bre-gutter        left space reserved for the drag handle (BRE)        (1.75em)
  *   --bre-min-height    writing area height (all modes)                       (300px)
  *   --bre-tail          clickable space below the last block                  (3em)
+ *   --bre-list-indent   left indent of bulleted/numbered lists (BREW, BREM)  (2em)
  *
  * Defaults use system colors, so black-on-white pages get black buttons with
  * white text and dark pages (color-scheme: dark) get the inverse automatically.
@@ -191,4 +192,8 @@
 .bre-brem-toggle {
   margin: calc(var(--bre-pad, 10px) * 0.8);
   padding: calc(var(--bre-pad, 10px) * 0.2) var(--bre-pad, 10px);
+}
+.bre-editor[data-bre-dragover] {
+  outline: 2px dashed var(--bre-focus, Highlight);
+  outline-offset: 2px;
 }
