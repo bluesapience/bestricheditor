@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
 ### Added
 - **Image upload in all three modes.** `uploadImage(file) => Promise<string>` now also works in BREW (toolbar picker, drop and paste at the caret) and BREM (drop/paste at the cursor with a `![Uploading …]()` placeholder that becomes the real image). BRE drops now land above or below the block under the pointer, including inside a columns block. One image per drop, paste or pick; extra files are ignored with a single `error` event. New `uploadMaxSize` option, `data-bre-dragover` marker while files are dragged over the editor, and README recipes for Firebase Storage, S3 and a generic endpoint. BREW and BREM now accept `onError`. In BREW, Undo / Redo (Cmd/Ctrl+Z, Shift+Z) now removes and restores an uploaded image (and the paragraph split) as long as it was the last change; after you type, the browser's own undo takes over.
 
