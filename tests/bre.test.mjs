@@ -1,6 +1,7 @@
 import { mount, tick } from './env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createEditor } from '../src/core/editor.js';
 import { blockRegistry } from '../src/core/blockRegistry.js';
 const registerBlock = (d) => blockRegistry.registerCustom(d);
@@ -318,14 +319,61 @@ test('BRE: keyboard block move (Alt+Shift+ArrowDown)', () => {
   ed.destroy();
 });
 
-test('BRE: no hard-coded styling — stylesheet source has no colors/fonts/vars', async () => {
-  const { readFileSync } = await import('node:fs');
-  const css = readFileSync(new URL('../src/bre.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+const cssSrc = (f) => stripComments(readFileSync(new URL('../src/' + f, import.meta.url), 'utf8'));
+
+test('CSS policy: bre.base.css is structural — no literal colors, fonts, shadows or radii', () => {
+  const css = cssSrc('bre.base.css');
   assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'no hex colors');
   assert.doesNotMatch(css, /rgba?\(|hsla?\(/i, 'no rgb/hsl colors');
-  assert.doesNotMatch(css, /--bre-color|--bre-font|--bre-radius/, 'no theme variables');
   assert.doesNotMatch(css, /font-family\s*:\s*(?!inherit)/i, 'no font families');
   assert.doesNotMatch(css, /box-shadow|border-radius|font-size\s*:\s*[\d.]/i, 'no decorative rules');
+  assert.doesNotMatch(css, /--bre-[\w-]+\s*:/, 'variables are only READ here, never defined');
+});
+
+test('CSS policy: bre.theme.css styles the editor chrome only, beats resets, with fallbacks', () => {
+  const css = cssSrc('bre.theme.css');
+  // Every selector carries a .bre- class (specificity >= 0,1,0): a reset such as
+  // `* { padding: 0 }` or Tailwind's `button { padding: 0 }` cannot wipe the chrome.
+  // The only :where() is the variable-defaults block, so `:root { --bre-… }` always wins.
+  const selectors = css.split('}').map((r) => r.split('{')[0].trim()).filter(Boolean)
+    .flatMap((list) => list.split(',').map((x) => x.trim()));
+  for (const sel of selectors) {
+    if (sel === ':where(:root)') continue;
+    assert.match(sel, /\.bre-/, 'selector must be class-based: ' + sel);
+    assert.doesNotMatch(sel, /:where\(/, 'no zero-specificity chrome rules: ' + sel);
+  }
+  // content is never styled: the host owns fonts, headings, lists, quotes, code
+  assert.doesNotMatch(css, /\.bre-(paragraph|heading|quote|code|code-wrapper|bulleted-list|numbered-list|image|video|audio)\b|\b(h[1-6]|p|blockquote|pre|ul|ol|li)\s*[,{]/, 'no content selectors');
+  assert.doesNotMatch(css, /font-family\s*:(?!\s*monospace)/i, 'no font families (monospace only for code-ish UI)');
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'colors are system colors or variables');
+  // every variable read has a fallback; variables are defined only on :where(:root)
+  assert.doesNotMatch(css, /var\(--bre-[\w-]+\)/, 'var() always has a fallback');
+  assert.ok(css.includes(':where(:root)'));
+  const outsideRoot = css.replace(/:where\(:root\)\s*\{[^}]*\}/, '');
+  assert.doesNotMatch(outsideRoot, /--bre-[\w-]+\s*:/, 'variables only defined on :where(:root)');
+});
+
+test('CSS policy: a universal reset after bre.css cannot zero the chrome padding (specificity)', () => {
+  // Compute the specificity of the padding rules the user reported missing.
+  const css = cssSrc('bre.theme.css');
+  for (const sel of ['.bre-slash-item', '.bre-table-btn', '.bre-brew-link-dialog']) {
+    assert.ok(new RegExp('(^|\\n|,\\s*)' + sel.replace('.', '\\.') + '\\s*[,{]').test(css), sel + ' is a plain class rule');
+  }
+  assert.match(css, /\.bre-slash-item\s*\{\s*padding:/);
+});
+
+test('CSS policy: the built package ships bre.css and bre-base.css (skips if not built)', async () => {
+  const { existsSync } = await import('node:fs');
+  const base = new URL('../dist/bre-base.css', import.meta.url);
+  const full = new URL('../dist/bre.css', import.meta.url);
+  if (!existsSync(base) || !existsSync(full)) return;
+  const b = readFileSync(base, 'utf8');
+  const f = readFileSync(full, 'utf8');
+  assert.ok(f.length > b.length, 'bre.css = base + theme');
+  assert.ok(f.includes(':where(:root){--bre-accent'), 'theme variable defaults present in bre.css');
+  assert.ok(!b.includes('--bre-accent:'), 'base build defines no variables');
+  assert.ok(!/box-shadow|border-radius/.test(b), 'base build has no decorative rules');
 });
 
 // Guards against tree-shaking dropping block registration (sideEffects flag).
@@ -565,5 +613,527 @@ test('block menu anchors beside the handle even when capture fires hover on the 
   assert.equal(menu.style.left, '34px', 'right of the handle (30 + 4)');
   assert.equal(menu.style.top, '120px', 'level with the handle');
   fire(menu, 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('table controls: shown only while editing (CSS contract) and focus is restored after a re-render', () => {
+  // CSS: hidden by default, visible via :focus-within in BRE and BREW
+  const css = readFileSync(new URL('../src/bre.base.css', import.meta.url), 'utf8');
+  assert.match(css, /\.bre-table-controls\s*\{\s*display:\s*none/);
+  assert.match(css, /\.bre-table-wrapper:focus-within \.bre-table-controls:not\(\[hidden\]\)/);
+  assert.match(css, /\[data-bre-type="table"\]:focus-within \.bre-table-controls:not\(\[hidden\]\)/);
+
+  // Behaviour: add-row re-renders the table; the caret must land back in a cell
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } }]));
+  const focused = [];
+  const orig = window.HTMLElement.prototype.focus;
+  window.HTMLElement.prototype.focus = function () { focused.push(this.getAttribute('data-bre-table-row') + ',' + this.getAttribute('data-bre-table-col')); };
+  fire(host.querySelector('[data-bre-table-row="1"][data-bre-table-col="1"]'), 'focusin');
+  fire(host.querySelector('[data-bre-table-action="add-row"]'), 'click');
+  assert.equal(ed.getJSON().blocks[0].data.rows.length, 3);
+  assert.equal(focused.at(-1), '2,1', 'caret goes to the new row, same column');
+  fire(host.querySelector('[data-bre-table-action="add-col"]'), 'click');
+  assert.equal(focused.at(-1), '2,2', 'caret goes to the new column');
+  fire(host.querySelector('[data-bre-table-action="del-col"]'), 'click');
+  assert.equal(focused.at(-1), '2,1', 'clamped into the smaller table');
+  window.HTMLElement.prototype.focus = orig;
+  ed.destroy();
+});
+
+
+// ── BRE uses the same inline dialog as BREW (no window.prompt) ───────────────
+const dlg = () => document.querySelector('.bre-brew-link-dialog');
+const setVal = (d, v) => { const i = d.querySelector('input'); i.value = v; };
+
+test('BRE dialog: formula click opens the shared dialog; Save applies, Cancel keeps, Esc closes', async () => {
+  const host = mount();
+  let nativePrompts = 0;
+  const origPrompt = window.prompt; window.prompt = () => { nativePrompts++; return null; };
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } }]));
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  let d = dlg();
+  assert.ok(d, 'inline dialog opened');
+  assert.equal(d.getAttribute('role'), 'dialog');
+  assert.equal(d.querySelector('input').value, 'x', 'prefilled with the current LaTeX');
+  setVal(d, 'y^2');
+  d.querySelector('.bre-brew-link-save').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].data.latex, 'y^2');
+  assert.equal(dlg(), null, 'dialog removed');
+  // Cancel keeps the value
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  setVal(dlg(), 'zzz');
+  dlg().querySelector('.bre-brew-link-cancel').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].data.latex, 'y^2');
+  // Escape closes
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  fire(dlg(), 'keydown', { key: 'Escape' });
+  assert.equal(dlg(), null);
+  assert.equal(nativePrompts, 0, 'window.prompt is never used');
+  window.prompt = origPrompt;
+  ed.destroy();
+});
+
+test('BRE dialog: media replace validates the URL (aria-invalid, no alert) and applies a good one', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  fire(host.querySelector('.bre-image'), 'dblclick');
+  await tick(5);
+  const d = dlg();
+  assert.ok(d);
+  setVal(d, 'javascript:alert(1)');
+  d.querySelector('.bre-brew-link-save').click();
+  assert.equal(d.querySelector('input').getAttribute('aria-invalid'), 'true');
+  assert.ok(dlg(), 'stays open on an invalid URL');
+  setVal(d, 'https://example.com/b.png');
+  d.querySelector('.bre-brew-link-save').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].data.src, 'https://example.com/b.png');
+  ed.destroy();
+});
+
+test('BRE dialog: slash → Formula inserts via the dialog; cancel leaves a clean paragraph', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  const field = host.querySelector('[data-bre-field]');
+  field.textContent = '/';
+  fire(field, 'input');
+  field.textContent = '/formula';
+  fire(field, 'input');
+  fire(field, 'keydown', { key: 'Enter' });
+  await tick(5);
+  const d = dlg();
+  assert.ok(d, 'formula dialog opened from the slash menu');
+  setVal(d, 'E=mc^2');
+  d.querySelector('.bre-brew-link-save').click();
+  await tick(5);
+  assert.equal(ed.getJSON().blocks[0].type, 'formula');
+  assert.equal(ed.getJSON().blocks[0].data.latex, 'E=mc^2');
+  // second time: cancel → the "/formula" text is cleared
+  ed.setJSON(doc([para('p', '')]));
+  const f2 = host.querySelector('[data-bre-field]');
+  f2.textContent = '/';
+  fire(f2, 'input');
+  f2.textContent = '/formula';
+  fire(f2, 'input');
+  fire(f2, 'keydown', { key: 'Enter' });
+  await tick(5);
+  dlg().querySelector('.bre-brew-link-cancel').click();
+  await tick(10);
+  assert.equal(ed.getJSON().blocks[0].type, 'paragraph');
+  assert.equal(host.querySelector('[data-bre-field]').textContent, '');
+  ed.destroy();
+});
+
+test('BRE dialog: destroy closes an open dialog; options.prompt still overrides', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } }]));
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  assert.ok(dlg());
+  ed.destroy();
+  assert.equal(dlg(), null, 'no orphaned dialog after destroy');
+});
+
+// ── Adding a line at the end of the document (BRE) ───────────────────────────
+test('BRE end of doc: clicking below a non-text last block adds a paragraph (image/table/divider/code/media)', () => {
+  const lasts = [
+    { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+    { id: 't', type: 'table', data: { rows: [['a'], ['b']] } },
+    { id: 'h', type: 'divider', data: {} },
+    { id: 'c', type: 'code', data: { code: 'x', language: '' } },
+    { id: 'a', type: 'audio', data: { src: 'https://example.com/a.mp3', caption: '' } },
+    { id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } },
+  ];
+  for (const last of lasts) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BRE' });
+    ed.setJSON(doc([para('p', 'text'), last]));
+    fire(host.querySelector('.bre-editor'), 'click'); // empty tail area: target is the editor root
+    assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph', last.type, 'paragraph'], last.type);
+    ed.destroy();
+  }
+});
+
+test('BRE end of doc: clicking below a text last block only moves the caret (no pile-up of empty lines)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('p', 'text')]));
+  for (let i = 0; i < 3; i++) fire(host.querySelector('.bre-editor'), 'click');
+  assert.equal(ed.getJSON().blocks.length, 1);
+  ed.destroy();
+});
+
+test('BRE end of doc: clicks in the side gutter (above the last block bottom) do nothing', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x'), { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  const last = host.querySelector('[data-bre-block-id="i"]');
+  last.getBoundingClientRect = () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 });
+  fire(host.querySelector('.bre-editor'), 'click', { clientY: 150 }); // beside the image
+  assert.equal(ed.getJSON().blocks.length, 2, 'unchanged');
+  fire(host.querySelector('.bre-editor'), 'click', { clientY: 260 }); // below it
+  assert.equal(ed.getJSON().blocks.length, 3);
+  ed.destroy();
+});
+
+test('BRE end of doc: ArrowDown on a selected last block, and from a table\'s last row, creates the next line; undo removes it', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('p', 'x'), { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  fire(host.querySelector('.bre-image'), 'click');
+  fire(host.querySelector('[data-bre-block-id="i"]'), 'keydown', { key: 'ArrowDown' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph', 'image', 'paragraph']);
+  fire(host.querySelector('[data-bre-block-id="p"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph', 'image'], 'undo removes the added line');
+
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']] } }]));
+  fire(host.querySelector('[data-bre-table-row="0"]'), 'keydown', { key: 'ArrowDown' }); // not the last row: native
+  assert.equal(ed.getJSON().blocks.length, 1);
+  fire(host.querySelector('[data-bre-table-row="1"]'), 'keydown', { key: 'ArrowDown' }); // last row: out of the table
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['table', 'paragraph']);
+  ed.destroy();
+});
+
+test('BRE end of doc: the theme leaves a clickable tail below the content (CSS contract)', () => {
+  const css = cssSrc('bre.theme.css');
+  assert.match(css, /\.bre-editor\[data-bre-mode="BRE"\]\s*\{[^}]*padding-bottom:\s*var\(--bre-tail,\s*3em\)/);
+  assert.match(css, /\.bre-brew-surface\s*\{[^}]*padding-bottom:\s*var\(--bre-tail,\s*3em\)/);
+});
+
+// ── Review fixes: focus, dialogs, handle, table arrows ───────────────────────
+const mediaDoc = () => doc([
+  para('a', 'before'),
+  { id: 'img', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } },
+  para('z', 'after'),
+]);
+const caret = (node, offset) => { const s = window.getSelection(); s.removeAllRanges(); const r = document.createRange(); r.setStart(node, offset); r.collapse(true); s.addRange(r); };
+
+test('table controls: mousedown must not steal focus from the cell (Safari/Firefox hide them otherwise)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['a'], ['b']] } }]));
+  const e = fire(host.querySelector('[data-bre-table-action="add-row"]'), 'mousedown');
+  assert.ok(e.defaultPrevented);
+  ed.destroy();
+});
+
+test('dialog: Cmd/Ctrl+Z inside the input dialog does not undo the document', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'one')]));
+  const field = host.querySelector('[data-bre-field]');
+  field.textContent = 'two';
+  fire(field, 'input');
+  // open the formula dialog through the slash flow
+  ed.setJSON(doc([{ id: 'f', type: 'formula', data: { latex: 'x', displayMode: true } }]));
+  fire(host.querySelector('.bre-formula'), 'click');
+  await tick(5);
+  const input = dlg().querySelector('input');
+  const e = fire(input, 'keydown', { key: 'z', metaKey: true });
+  assert.ok(!e.defaultPrevented, 'native input undo is left alone');
+  assert.equal(ed.getJSON().blocks[0].type, 'formula', 'document untouched');
+  fire(dlg(), 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('dialog: always gets a position (collapsed anchor falls back), and closes on pointerdown outside', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', '')]));
+  const field = host.querySelector('[data-bre-field]');
+  field.focus();
+  caret(field, 0);
+  fire(field, 'keydown', { key: 'k', metaKey: true });
+  await tick(5);
+  const d = dlg();
+  assert.ok(d, 'link dialog opened');
+  assert.notEqual(d.style.top, '', 'positioned even though the saved range has no rect');
+  assert.notEqual(d.style.left, '');
+  await tick(5);
+  fire(document.body, 'pointerdown'); // the drag handle suppresses mousedown, so pointerdown it is
+  assert.equal(dlg(), null, 'closed by an outside pointerdown');
+  ed.destroy();
+});
+
+test('dialog: cancelling after a media dblclick keeps the block selected (focus can return)', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(mediaDoc());
+  fire(host.querySelector('.bre-image'), 'click');
+  const wrapper = host.querySelector('[data-bre-block-id="img"]');
+  assert.ok(wrapper.hasAttribute('data-bre-selected'));
+  fire(wrapper, 'dblclick'); // dblclick target bubbles from the wrapper's child normally; use the image
+  fire(host.querySelector('.bre-image'), 'dblclick');
+  await tick(5);
+  fire(dlg().querySelector('input'), 'focusin'); // focus moves into the dialog
+  assert.ok(wrapper.hasAttribute('data-bre-selected') && wrapper.hasAttribute('tabindex'), 'selection + tabindex survive');
+  ed.destroy();
+});
+
+test('undo after deleting media keeps focus in the editor (lands in the restored block) and clears stale selection', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(mediaDoc());
+  fire(host.querySelector('.bre-image'), 'click');
+  fire(host.querySelector('[data-bre-block-id="img"]'), 'keydown', { key: 'Delete' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'z']);
+  const focused = [];
+  const orig = window.HTMLElement.prototype.focus;
+  window.HTMLElement.prototype.focus = function () { focused.push(this); };
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  window.HTMLElement.prototype.focus = orig;
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.id), ['a', 'img', 'z']);
+  const restored = host.querySelector('[data-bre-block-id="img"]');
+  assert.ok(focused.length && restored.contains(focused.at(-1)), 'focus goes into the restored block, not <body>');
+  assert.equal(host.querySelectorAll('[data-bre-selected]').length, 0, 'no stale selection left over');
+  // a block with NO field (divider) is selected instead, so a second Cmd+Z still has a focus target
+  ed.setJSON(doc([para('a', 'x'), { id: 'hr', type: 'divider', data: {} }, para('z', 'y')]));
+  fire(host.querySelector('.bre-divider'), 'click');
+  fire(host.querySelector('[data-bre-block-id="hr"]'), 'keydown', { key: 'Delete' });
+  fire(host.querySelector('[data-bre-block-id="a"] [data-bre-field]'), 'keydown', { key: 'z', metaKey: true });
+  assert.ok(host.querySelector('[data-bre-block-id="hr"]').hasAttribute('data-bre-selected'), 'divider re-selected');
+  ed.destroy();
+});
+
+test('drag handle: right/middle press is ignored; a press with no buttons held drops the stale press', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(mediaDoc());
+  fire(host.querySelector('[data-bre-block-id="img"]'), 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  fire(handle, 'pointerdown', { button: 2, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointerup', { button: 2, clientX: 5, clientY: 5, pointerId: 1 });
+  assert.equal(document.querySelector('.bre-block-menu').hidden, true, 'right-click does not open the menu');
+  // stale press: left press, then pointermove with no buttons held, then a big move must NOT start a drag
+  fire(handle, 'pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointermove', { buttons: 0, clientX: 5, clientY: 80, pointerId: 1 });
+  assert.equal(host.querySelectorAll('[data-bre-dragging]').length, 0);
+  ed.destroy();
+});
+
+test('drag handle: hovering the gutter/root beside a tall block keeps the handle; the click after a press is swallowed', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x'), { id: 'i', type: 'image', data: { src: 'https://example.com/a.png', alt: '', caption: '' } }]));
+  fire(host.querySelector('[data-bre-block-id="i"]'), 'pointerover');
+  const handle = host.querySelector('[data-bre-handle]');
+  assert.equal(handle.hidden, false);
+  fire(host.querySelector('.bre-editor'), 'pointerover'); // gutter
+  assert.equal(handle.hidden, false, 'still visible');
+  // after a handle click, the retargeted click on root must not add a line at the end
+  fire(handle, 'pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(handle, 'pointerup', { button: 0, clientX: 5, clientY: 5, pointerId: 1 });
+  fire(host.querySelector('.bre-editor'), 'click');
+  assert.equal(ed.getJSON().blocks.length, 2, 'no stray paragraph');
+  fire(document.querySelector('.bre-block-menu'), 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('table arrows leave the table only from the cell\'s edge (wrapped cells move line-by-line)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([{ id: 't', type: 'table', data: { rows: [['aaaa bbbb'], ['cccc dddd']] } }]));
+  const last = host.querySelector('[data-bre-table-row="1"]');
+  caret(last.firstChild, 3); // middle of the text: a wrapped cell would move down a line natively
+  const mid = fire(last, 'keydown', { key: 'ArrowDown' });
+  assert.ok(!mid.defaultPrevented);
+  assert.equal(ed.getJSON().blocks.length, 1);
+  caret(last.firstChild, last.firstChild.length); // at the end
+  fire(last, 'keydown', { key: 'ArrowDown' });
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['table', 'paragraph']);
+  ed.destroy();
+});
+
+// ── Accessibility fixes from review ──────────────────────────────────────────
+test('a11y: Alt+Shift+M works on macOS where Option changes e.key (uses the physical key)', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(doc([para('a', 'x')]));
+  assert.equal(host.querySelector('.bre-editor').getAttribute('aria-keyshortcuts'), 'Alt+Shift+M');
+  fire(host.querySelector('[data-bre-field]'), 'keydown', { key: 'Â', code: 'KeyM', altKey: true, shiftKey: true });
+  const menu = document.querySelector('.bre-block-menu');
+  assert.equal(menu.hidden, false);
+  fire(menu, 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+test('a11y: block menu exposes the active item via aria-activedescendant', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE' });
+  ed.setJSON(media());
+  const menu = openHandleMenu(host, 'img');
+  const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+  assert.ok(items.every((i) => i.id), 'every item has an id');
+  assert.equal(menu.getAttribute('aria-activedescendant'), items[0].id);
+  fire(menu, 'keydown', { key: 'ArrowDown' });
+  assert.equal(menu.getAttribute('aria-activedescendant'), items[1].id, 'follows the highlighted item');
+  fire(menu, 'keydown', { key: 'Escape' });
+  ed.destroy();
+});
+
+// ── Image upload: rules shared with BREW / BREM ─────────────────────────────
+const imgFile = (name = 'pic.png', body = 'x') => new window.File([body], name, { type: 'image/png' });
+const dropFiles = (el, files, props = {}) => fire(el, 'drop', { dataTransfer: { files, types: ['Files'] }, ...props });
+const blockEl = (host, id) => host.querySelector(`[data-bre-block-id="${id}"]`);
+const rectAt = (el) => { el.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100, left: 0, right: 100, width: 100 }); };
+
+test('BRE upload: drop of an image with no hook is swallowed and reported', async () => {
+  const host = mount();
+  const errs = [];
+  const ed = createEditor(host, { mode: 'BRE', onError: (e) => errs.push(e.type) });
+  ed.setJSON(doc([para('p1', 'one')]));
+  const e = dropFiles(blockEl(host, 'p1'), [imgFile()]);
+  await tick(10);
+  assert.ok(e.defaultPrevented);
+  assert.deepEqual(errs, ['upload']);
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  ed.destroy();
+});
+
+test('BRE upload: pasting a bare image file with no hook is reported, not inserted', async () => {
+  const host = mount();
+  const errs = [];
+  const ed = createEditor(host, { mode: 'BRE', onError: (e) => errs.push(e.type) });
+  fire(host.querySelector('[data-bre-field]'), 'paste', { clipboardData: { files: [imgFile()], getData: () => '' } });
+  await tick(10);
+  assert.deepEqual(errs, ['upload']);
+  assert.equal(ed.getJSON().blocks[0].type, 'paragraph');
+  ed.destroy();
+});
+
+test('BRE upload: uploadMaxSize rejects before the hook runs', async () => {
+  const host = mount();
+  const errs = []; let called = 0;
+  const ed = createEditor(host, { mode: 'BRE', uploadMaxSize: 3, uploadImage: async () => { called++; return 'https://e.com/a.png'; }, onError: (e) => errs.push(e.type) });
+  ed.setJSON(doc([para('p1', 'one')]));
+  dropFiles(blockEl(host, 'p1'), [imgFile('big.png', '12345')]);
+  await tick(10);
+  assert.equal(called, 0);
+  assert.deepEqual(errs, ['upload']);
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  ed.destroy();
+});
+
+test('BRE upload: a drop in the upper half inserts before the block, the lower half after', async () => {
+  for (const [clientY, expected] of [[10, ['image', 'paragraph']], [90, ['paragraph', 'image']]]) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://cdn.example.com/p.png' });
+    ed.setJSON(doc([para('p1', 'one')]));
+    const el = blockEl(host, 'p1');
+    rectAt(el);
+    dropFiles(el, [imgFile()], { clientY });
+    await tick(20);
+    assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), expected, 'clientY ' + clientY);
+    ed.destroy();
+  }
+});
+
+test('BRE upload: several files in one drop upload only the first and report once', async () => {
+  const host = mount();
+  const calls = [], errs = [];
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async (f) => { calls.push(f.name); return 'https://cdn.example.com/' + f.name; }, onError: (e) => errs.push(e.file && e.file.name) });
+  ed.setJSON(doc([para('p1', 'one')]));
+  dropFiles(blockEl(host, 'p1'), [imgFile('a.png'), imgFile('b.png'), imgFile('c.png')]);
+  await tick(20);
+  assert.deepEqual(calls, ['a.png']);
+  assert.deepEqual(errs, ['b.png']);
+  assert.equal(ed.getJSON().blocks.filter((b) => b.type === 'image').length, 1);
+  ed.destroy();
+});
+
+test('BRE upload: the root is marked while files are dragged over it', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://e.com/a.png' });
+  const root = host.querySelector('.bre-editor') || host.firstElementChild;
+  fire(root, 'dragenter', { dataTransfer: { types: ['Files'] } });
+  assert.equal(root.getAttribute('data-bre-dragover'), 'true');
+  fire(root, 'drop', { dataTransfer: { files: [], types: ['Files'] } });
+  assert.equal(root.hasAttribute('data-bre-dragover'), false);
+  ed.destroy();
+});
+
+test('BRE upload: destroy() or setJSON() while an upload is pending does not throw', async () => {
+  for (const act of ['destroy', 'setJSON']) {
+    const host = mount();
+    let release; const gate = new Promise((r) => { release = r; });
+    const errs = [];
+    const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => { await gate; return 'https://cdn.example.com/p.png'; }, onError: (e) => errs.push(e.type) });
+    ed.setJSON(doc([para('p1', 'one')]));
+    dropFiles(blockEl(host, 'p1'), [imgFile()]);
+    await tick(5);
+    if (act === 'destroy') ed.destroy(); else ed.setJSON(doc([para('q1', 'two')]));
+    release();
+    await tick(20);
+    assert.deepEqual(errs, [], act);
+    if (act === 'setJSON') { assert.equal(ed.getJSON().blocks.some((b) => b.type === 'image'), false, 'a late result must not land in the newly loaded document'); ed.destroy(); }
+  }
+});
+
+test('BRE upload: a result arriving after setReadOnly(true) is not inserted', async () => {
+  const host = mount();
+  let release; const gate = new Promise((r) => { release = r; });
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => { await gate; return 'https://cdn.example.com/p.png'; } });
+  ed.setJSON(doc([para('p1', 'one')]));
+  dropFiles(blockEl(host, 'p1'), [imgFile()]);
+  await tick(5);
+  ed.setReadOnly(true);
+  release(); await tick(20);
+  assert.deepEqual(ed.getJSON().blocks.map((b) => b.type), ['paragraph']);
+  ed.destroy();
+});
+
+test('BRE upload: pasting files together with text pastes the text, not a screenshot', async () => {
+  const host = mount();
+  let called = 0;
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => { called++; return 'https://cdn.example.com/p.png'; } });
+  fire(host.querySelector('[data-bre-field]'), 'paste', { clipboardData: { files: [imgFile()], getData: (t) => (t === 'text/plain' ? 'a\tb' : '') } });
+  await tick(20);
+  assert.equal(called, 0);
+  assert.ok(!ed.getJSON().blocks.some((b) => b.type === 'image'));
+  ed.destroy();
+});
+
+test('BRE upload: a drop onto a block inside a column inserts the image in that column', async () => {
+  for (const [clientY, expected] of [[90, ['c1', 'IMG', 'c2']], [10, ['IMG', 'c1', 'c2']]]) {
+    const host = mount();
+    const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://cdn.example.com/p.png' });
+    ed.setJSON(doc([
+      { id: 'cols', type: 'columns', data: { columns: [[para('c1', 'a'), para('c2', 'b')], [para('d1', 'x')]] } },
+      para('after', 'end'),
+    ]));
+    const el = blockEl(host, 'c1');
+    assert.ok(el, 'column child is rendered with its block id');
+    rectAt(el);
+    dropFiles(el, [imgFile()], { clientY });
+    await tick(20);
+    const blocks = ed.getJSON().blocks;
+    assert.deepEqual(blocks.map((b) => b.id === 'cols' ? 'cols' : b.id), ['cols', 'after'], 'top level untouched');
+    const col0 = blocks[0].data.columns[0].map((b) => (b.type === 'image' ? 'IMG' : b.id));
+    assert.deepEqual(col0, expected, 'clientY ' + clientY);
+    assert.equal(blocks[0].data.columns[1].length, 1, 'other column untouched');
+    ed.destroy();
+  }
+});
+
+test('BRE upload: a column drop can be undone', async () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BRE', uploadImage: async () => 'https://cdn.example.com/p.png' });
+  ed.setJSON(doc([{ id: 'cols', type: 'columns', data: { columns: [[para('c1', 'a')], [para('d1', 'x')]] } }]));
+  const el = blockEl(host, 'c1'); rectAt(el);
+  dropFiles(el, [imgFile()], { clientY: 90 });
+  await tick(20);
+  assert.equal(ed.getJSON().blocks[0].data.columns[0].length, 2);
+  fire(host.querySelector('[data-bre-field]'), 'keydown', { key: 'z', ctrlKey: true });
+  assert.equal(ed.getJSON().blocks[0].data.columns[0].length, 1);
   ed.destroy();
 });

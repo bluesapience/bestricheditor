@@ -1,16 +1,22 @@
 {
   "name": "bestricheditor",
-  "version": "0.4.1",
-  "description": "One library, every editing style \u2014 block editor (BRE), Markdown (BREM), and WYSIWYG (BREW). Native JS, no frameworks.",
+  "version": "0.6.0",
+  "description": "One library, every editing style — block editor (BRE), Markdown (BREM), and WYSIWYG (BREW). Native JS, no frameworks.",
   "type": "module",
   "main": "dist/bre.umd.cjs",
   "module": "dist/bre.esm.js",
   "style": "dist/bre.css",
   "exports": {
     ".": {
+      "import": {
+        "types": "./types/index.d.ts",
+        "default": "./dist/bre.esm.js"
+      },
+      "require": {
+        "types": "./types/index.d.cts",
+        "default": "./dist/bre.umd.cjs"
+      },
       "types": "./types/index.d.ts",
-      "import": "./dist/bre.esm.js",
-      "require": "./dist/bre.umd.cjs",
       "default": "./dist/bre.esm.js"
     },
     "./dist/bre.css": "./dist/bre.css",
@@ -18,13 +24,17 @@
     "./dist/katex.css": "./dist/katex.css",
     "./dist/bre.katex.umd.js": "./dist/bre.katex.umd.js",
     "./package.json": "./package.json",
-    "./dist/bre.umd.js": "./dist/bre.umd.js"
+    "./dist/bre.umd.js": "./dist/bre.umd.js",
+    "./dist/bre-base.css": "./dist/bre-base.css",
+    "./base.css": "./dist/bre-base.css"
   },
   "files": [
     "dist",
     "!dist/bre.umd.js.map",
     "!dist/bre.katex.umd.js.map",
     "types/index.d.ts",
+    "types/index.d.cts",
+    "LICENSE",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -45,7 +55,7 @@
   "scripts": {
     "dev": "rollup -c --watch",
     "clean": "rimraf dist",
-    "build": "npm run clean && BUILD=production rollup -c && node scripts/build-katex-assets.mjs",
+    "build": "npm run clean && BUILD=production rollup -c && node scripts/build-katex-assets.mjs && node scripts/copy-types.mjs",
     "preview": "serve . -p 4000",
     "test": "node scripts/run-tests.mjs",
     "size": "size-limit",
@@ -59,15 +69,16 @@
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-terser": "^1.0.2",
-    "@size-limit/file": "^13.1.1",
+    "@size-limit/file": "13.1.1",
     "jsdom": "^29.1.1",
+    "postcss": "8.5.33",
     "rimraf": "^6.1.4",
     "rollup": "^4.0.0",
     "rollup-plugin-livereload": "^2.0.0",
     "rollup-plugin-postcss": "^4.0.2",
     "rollup-plugin-serve": "^2.0.0",
     "serve": "^14.0.0",
-    "size-limit": "^12.1.0"
+    "size-limit": "13.1.1"
   },
   "types": "types/index.d.ts",
   "unpkg": "dist/bre.umd.js",
@@ -84,13 +95,13 @@
     {
       "name": "ESM entry (min+gz)",
       "path": "dist/bre.esm.js",
-      "limit": "40 kB",
+      "limit": "45 kB",
       "gzip": true
     },
     {
       "name": "UMD core (min+gz, no formulas)",
       "path": "dist/bre.umd.js",
-      "limit": "50 kB",
+      "limit": "55 kB",
       "gzip": true
     },
     {
@@ -102,7 +113,13 @@
     {
       "name": "bre.css (min+gz)",
       "path": "dist/bre.css",
-      "limit": "6 kB",
+      "limit": "8 kB",
+      "gzip": true
+    },
+    {
+      "name": "bre-base.css (structure only, min+gz)",
+      "path": "dist/bre-base.css",
+      "limit": "4 kB",
       "gzip": true
     }
   ]

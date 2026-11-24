@@ -204,6 +204,14 @@ export function createState(initialDoc) {
     commit(blocks, opts);
   }
 
+  /**
+   * Swap in cleaned blocks (same ids/order) WITHOUT notifying, touching `updated`
+   * or the undo history — used when sanitizing output, not for edits.
+   */
+  function replaceBlocksSilently(blocks) {
+    doc = { ...doc, blocks };
+  }
+
   function subscribe(fn) {
     subscribers.add(fn);
     return () => subscribers.delete(fn);
@@ -223,6 +231,7 @@ export function createState(initialDoc) {
     moveBlock,
     setDoc,
     updateColumnBlock,
+    replaceBlocksSilently,
     subscribe,
     saveUndoSnapshot,
     undo,

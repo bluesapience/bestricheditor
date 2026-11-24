@@ -5,6 +5,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+### Added
+- **Image upload in all three modes.** `uploadImage(file) => Promise<string>` now also works in BREW (toolbar picker, drop and paste at the caret) and BREM (drop/paste at the cursor with a `![Uploading …]()` placeholder that becomes the real image). BRE drops now land above or below the block under the pointer, including inside a columns block. One image per drop, paste or pick; extra files are ignored with a single `error` event. New `uploadMaxSize` option, `data-bre-dragover` marker while files are dragged over the editor, and README recipes for Firebase Storage, S3 and a generic endpoint. BREW and BREM now accept `onError`. In BREW, Undo / Redo (Cmd/Ctrl+Z, Shift+Z) now removes and restores an uploaded image (and the paragraph split) as long as it was the last change; after you type, the browser's own undo takes over.
+
+### Fixed
+- **BRE lists** now look like BREW and BREM lists: the same `--bre-list-indent` (default `2em`), markers hanging to the left of the text, and the same gap after the bullet or number. Numbered items also no longer show a stray bullet next to the number.
+- **BREW and BREM lists** no longer hang outside the editor's left edge when the host page resets list padding (`* { padding: 0 }`): lists get a `--bre-list-indent` (default `2em`) in `bre.css`.
+
+### Changed
+- **BREW link dialog** (insert and edit) now opens just below its line and spans the block's width, like the formula dialog.
+- Dropping or pasting an image file with no `uploadImage` is ignored and reported through `error` (`type: 'upload'`) instead of being swallowed silently.
+- **Headerless tables** (`hasHeader: false`) are preserved by the HTML importer and in BRE, BREW and BREM.
+- BREM computes the sanitized preview once per Markdown revision and shares it with `getHTML()`; `blocksToMarkdown` handles plain links without a DOM parse.
+
+## [0.5.0] - 2026-11-18
+
+### Upgrading from 0.4.x — read this first
+
+0.5.0 changes defaults and a few public surfaces. Check these:
+
+- **Styling (CSS).**
+  - The old theme variables are gone: `--bre-color-*`, `--bre-font-*`, `--bre-editor-max-width`, `--bre-editor-padding`. Your **content** (fonts, colors, headings, lists, quotes, code) now simply inherits from your page — nothing to configure.
+  - The editor's own UI (menus, popups, dialogs, buttons) has a neutral default look driven by a new, smaller variable set: `--bre-accent`, `--bre-accent-text`, `--bre-surface`, `--bre-border`, `--bre-radius` (now defaults to `0`, was `6px`), `--bre-shadow`, `--bre-pad`, `--bre-focus`, `--bre-gutter`, `--bre-tail`, `--bre-min-height`. Rough mapping: `--bre-color-accent` → `--bre-accent`, `--bre-color-bg` → `--bre-surface`, `--bre-color-border` → `--bre-border`.
+  - Want no default look? Import `bestricheditor/base.css` instead of `bestricheditor/dist/bre.css`.
+  - The BRE editor now reserves a small left gutter for the drag handle (`--bre-gutter`, default `1.75em`) and some space below the last block (`--bre-tail`). If you added your own left padding for the handle, remove it.
+- **KaTeX CSS is no longer injected from a CDN.** Add `import 'bestricheditor/katex.css'` (or pass `katexCssUrl`). KaTeX itself loads lazily, only when a formula is rendered.
+- **Bundlers:** the ESM build keeps `dompurify` and `katex` as external dependencies (your bundler dedupes them). No change for normal bundler use; a plain `<script type="module">` page needs an import map (see `demo/index.html`). The UMD/CDN build is unchanged for script-tag users but now lazy-loads `bre.katex.umd.js` from the same folder.
+- **`require()`:** CommonJS now loads `dist/bre.umd.cjs` (the package is `"type": "module"`); types for CJS are in `types/index.d.cts`.
+- **`virtualize` now defaults to `'auto'`** (on above 300 blocks). Find-in-page and printing only see rendered blocks while virtualized; pass `virtualize: false` to keep the old behaviour.
+- **`getJSON()` returns sanitized, read-only data:** treat the returned object as immutable (it is shared with undo history; repeat calls return the same object until something changes). `html` fields are sanitized, `data:` URIs are never allowed, media `src` must be `http(s)`, `mailto` or a relative URL, and block ids are limited to `[\w.:-]{1,128}`.
+- **Interaction changes:** a single click on a loaded image/audio/video now **selects** it (Delete removes it; double-click or the block menu replaces its source) instead of opening the URL prompt. URL, link and formula entry use an inline dialog instead of `window.prompt` (pass `prompt` to supply your own). Table controls appear only while editing a table.
+- **BRE DOM:** blocks are two elements (wrapper + content) with one shared drag handle; code relying on per-block `.bre-drag-handle` elements or the old `bre-block` structure needs updating. Custom block plugins now receive `render(block, ctx)`.
+
+
 ### Added
 - **Notion-style block selection and menu**: click image/audio/video/divider to select, `Backspace`/`Delete` removes; click the drag handle (or `Alt+Shift+M`) for a Replace / Duplicate / Delete menu; double-click media to replace. A single click on loaded media no longer opens the URL prompt (empty placeholders still do).
 - **BREW block deletion**: clicking an image/audio/video/divider selects it (`Backspace`/`Delete` removes it via the browser's undo-able delete, `Esc` deselects, `Enter` or double-click edits media); media and formula dialogs have a **Remove** button; tables have a **Delete table** button; formulas edit in a dialog instead of `window.prompt`.
@@ -30,6 +65,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI workflow, CONTRIBUTING, CODE_OF_CONDUCT, issue and PR templates.
 
 ### Fixed
+- **`data:` URIs are never allowed in editor HTML** — stripped from `src`, `href`, `poster`, `srcset` and SVG `href` (images, video, links), in every mode and in pasted HTML. Previously DOMPurify let them through on media tags.
+- **`getJSON()` and `change` payloads are sanitized.** Block `html` was returned exactly as loaded or typed, so a host that rendered it (or stored it for others to render) could be exposed. Output is now cleaned once per block object (cached; plain text and attribute-less `<b>/<i>/<u>/<em>/<strong>/<code>/…` skip DOMPurify), including blocks nested in columns and text restored by undo. `setJSON()` stays fast: cleaning happens when you read, not when you load. Repeat `getJSON()` calls return the same object until something changes.
+- **Security**: content `id`/`name` attributes are dropped (or prefixed in the KaTeX/media path) so a document can no longer DOM-clobber `window.BRE_KATEX_URL` and inject a script in the UMD build; the UMD loader also only accepts a string URL / a real KaTeX object. BREW no longer lets an unclosed `<a>`/`<b>` in one block leak into the next. Loaded documents have media `src` checked against the URL policy and block ids restricted to a safe charset. The DOMPurify hook is always removed (`try/finally`).
+- **Dialogs / focus**: Cmd/Ctrl+Z inside the input dialog no longer undoes the document; dialogs always get a position and account for a scrolled editor; they close on `pointerdown` outside; undo after deleting a block keeps focus in the editor; table/media buttons keep focus on mousedown so the focus-only controls don't hide in Safari/Firefox.
+- **Drag handle**: right/middle press ignored; stale press dropped; handle stays visible in the gutter beside tall blocks; the click that follows a handle press no longer adds a line at the end. Table arrows leave a table only from the cell's edge.
+- **Accessibility**: `Alt+Shift+M` works on macOS (physical key) and is advertised via `aria-keyshortcuts`; the block menu exposes the active item (`aria-activedescendant`); BREW announces selection/deletion (live region), names the selected block, labels media buttons ("Edit image"), and `↓`/`↑` at a paragraph's edge selects an adjacent image/divider so keyboard users can reach Edit/Remove.
+- **Packaging**: a `LICENSE` file ships; UMD builds no longer reference unpublished sourcemaps; `require()` consumers get `types/index.d.cts`.
+- **Adding a line at the end of the document**: in BRE, clicking the empty space below the last block puts the caret there, or adds a new paragraph when the last block can't take text (image, audio, video, table, divider, code, formula); `↓` on a selected last block and `↓` from a table's last row do the same (`↑` from the first row moves up). BREW gets the table arrows too, and its end-of-document paragraph no longer depends on `execCommand('insertHTML')`. The theme reserves a clickable tail below the content (`--bre-tail`, default 3em; the editor also has a `--bre-min-height`), so there is always somewhere to click even in a long document.
+- Table controls (add/remove row/column, delete table) are shown only while the caret is inside the table, in BRE and BREW. In BRE, focus is restored to a cell after each action so the controls stay up.
+- BREW: the media and formula edit dialogs now span the width of the block they edit (min 280 px, never wider than the editor).
+- BREW: you can add a line at the end of the document when the last block is an image, audio, video, table, divider or code block — click the empty space below it, or press `↓` on the selected block (also selects/moves between neighbouring blocks).
+- BREW: media **Edit / Remove** buttons now float over the block's top-left corner when it is selected or hovered (instead of sitting permanently underneath).
+- BREW: media dialog opens with its top-left corner on the block's top-left corner. YouTube/Vimeo embeds (iframes) and native `<video>` (double-click = fullscreen) couldn't be selected or edited by click, so every image/audio/video block now has **Edit** and **Remove** buttons under it (hidden in read-only; never part of `getJSON`/`getHTML`).
+- BREW: link, media and formula dialogs opened at the editor's top-left corner; they now appear just below the element or selection they edit, clamped inside the editor.
 - BREW: captions under image/audio/video are editable inline again (click and type; Enter commits), with a placeholder when empty; they lock in read-only mode.
 - BREW: table control buttons and KaTeX markup were stripped from editor-generated snippets (toolbar-inserted tables/formulas); they are now sanitized with the right allowances.
 - Columns content was silently dropped when a BRE document was loaded into BREW or BREM (data shape `columns` vs `children`); both shapes are now read.
@@ -59,6 +108,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Numbered lists restart correctly after non-list blocks.
 
 ### Changed
+- **Styling**: `bre.css` now includes a default look for the editor's OWN UI (menus, popups, dialogs, buttons, selection outline, table/media controls, drag-handle gutter), driven by `--bre-accent`, `--bre-accent-text`, `--bre-surface`, `--bre-border`, `--bre-radius`, `--bre-shadow`, `--bre-pad`, `--bre-focus`, `--bre-gutter`, `--bre-min-height`. Defaults use system colors (black buttons/white text on light pages, inverted on dark). Rules are plain single-class selectors so CSS resets (`* { padding: 0 }`, Tailwind preflight) cannot wipe the menu/button spacing, while a host rule for the same class still overrides them; only the variable defaults are zero-specificity. Content (text, headings, lists, quotes, code) is still never styled. For structure only, import `bestricheditor/base.css` (`dist/bre-base.css`, 1.5 kB gz). This replaces the earlier "no visual styling at all" policy.
+- **BRE input dialogs**: URL, link and formula entry use the same inline dialog as BREW (shared `src/ui/dialog.js`) instead of the browser's `window.prompt` — positioned at the block, validated inline (`aria-invalid`), keyboard friendly (Enter/Esc), and styleable. `options.prompt` still overrides it.
 - **Performance (BRE)**: structural-sharing state (O(1) undo snapshots, O(1) block lookup), no sanitizing on the keystroke path (lazy, per touched block), per-block HTML cache for `getHTML()`, one shared drag handle (2 elements per block instead of ~12), plain-text fast path (no DOMPurify for markup-free text), identity-based diff on undo/redo.
 - **BREM**: block→Markdown conversion has a DOM-free fast path for simple inline markup and the preview is built from a single sanitized fragment (5,000-block `setJSON`: ~2.6 s → ~0.4 s in jsdom).
 - **BREW**: incremental block model; `getJSON` / `getHTML` no longer re-walk the DOM.

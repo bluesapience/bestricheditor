@@ -1,0 +1,199 @@
+/*
+ * Best Rich Editor — default look for the editor's OWN UI (chrome).
+ *
+ * Covers menus, popups, dialogs, buttons, toolbars, the selection outline,
+ * table/media controls and a little layout spacing. It deliberately does NOT
+ * style your content: fonts, sizes, headings, paragraphs, lists, quotes and code
+ * keep inheriting from the host page.
+ *
+ * Rules are plain single-class selectors: strong enough that a CSS reset
+ * (`* { padding: 0 }`, Tailwind's `button { … }`) cannot wipe them, and weak
+ * enough that your own class rule (same selector, loaded later) overrides them.
+ * Or change the look with these variables. The slash menu, block menu and
+ * floating toolbar are attached to <body>, so set variables on :root (or body)
+ * for them to apply:
+ *
+ *   --bre-accent        buttons, active menu item, pressed toolbar buttons   (CanvasText)
+ *   --bre-accent-text   text on the accent color                             (Canvas)
+ *   --bre-surface       popup / menu / dialog background                     (Canvas)
+ *   --bre-border        hairlines around popups, tables, columns             (currentColor, as in bre-base.css)
+ *   --bre-radius        corner radius for chrome                             (0)
+ *   --bre-shadow        popup shadow                                         (soft drop shadow)
+ *   --bre-pad           base spacing unit for chrome                         (10px)
+ *   --bre-focus         selected-block outline                               (Highlight)
+ *   --bre-gutter        left space reserved for the drag handle (BRE)        (1.75em)
+ *   --bre-min-height    writing area height (all modes)                       (300px)
+ *   --bre-tail          clickable space below the last block                  (3em)
+ *   --bre-list-indent   left indent of bulleted/numbered lists (BREW, BREM)  (2em)
+ *
+ * Defaults use system colors, so black-on-white pages get black buttons with
+ * white text and dark pages (color-scheme: dark) get the inverse automatically.
+ * `bre-base.css` is the same package without this file (structure only).
+ */
+
+/* Defaults for the variables the base file reads. :where(:root) keeps them at
+   zero specificity, so `:root { --bre-accent: … }` in your CSS always wins. */
+:where(:root) {
+  --bre-accent: CanvasText;
+  --bre-accent-text: Canvas;
+  --bre-border: color-mix(in srgb, CanvasText 18%, transparent);
+}
+
+/* ── Popups: slash menu, block menu, floating toolbar, dialogs ─────────────── */
+/* (colors/borders come from the variable-aware minimums in bre-base.css) */
+.bre-slash-menu,
+.bre-inline-toolbar,
+.bre-brew-link-dialog {
+  border-radius: var(--bre-radius, 0);
+  box-shadow: var(--bre-shadow, 0 8px 24px rgb(0 0 0 / 0.12));
+}
+
+.bre-slash-menu {
+  min-width: 240px;
+}
+.bre-block-menu {
+  min-width: 180px;
+}
+
+.bre-slash-item {
+  padding: calc(var(--bre-pad, 10px) * 0.6) var(--bre-pad, 10px);
+}
+.bre-slash-item__icon {
+  font-family: monospace;
+  min-width: 2.5em;
+  text-align: center;
+}
+.bre-slash-item__desc {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+.bre-slash-item[data-active="true"] .bre-slash-item__desc {
+  opacity: 0.75;
+}
+
+/* ── Floating inline toolbar ───────────────────────────────────────────────── */
+.bre-inline-toolbar {
+  padding: 2px;
+}
+.bre-inline-toolbar-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: none;
+}
+.bre-inline-toolbar-btn[aria-pressed="true"] {
+  background: var(--bre-accent, CanvasText);
+  color: var(--bre-accent-text, Canvas);
+}
+
+/* ── Action buttons ────────────────────────────────────────────────────────── */
+.bre-table-btn,
+.bre-brew-link-save,
+.bre-brew-link-cancel,
+.bre-brew-link-remove {
+  background: var(--bre-accent, CanvasText);
+  color: var(--bre-accent-text, Canvas);
+  border: 1px solid var(--bre-accent, CanvasText);
+  border-radius: var(--bre-radius, 0);
+  padding: calc(var(--bre-pad, 10px) * 0.4) calc(var(--bre-pad, 10px) * 1.2);
+  line-height: 1.5;
+}
+.bre-table-btn:hover,
+.bre-brew-link-save:hover,
+.bre-brew-link-cancel:hover,
+.bre-brew-link-remove:hover {
+  opacity: 0.85;
+}
+.bre-table-controls,
+.bre-media-controls {
+  gap: calc(var(--bre-pad, 10px) * 0.6);
+  padding: calc(var(--bre-pad, 10px) * 0.6);
+}
+
+/* ── Dialogs (position and width are set by the library) ───────────────────── */
+.bre-brew-link-dialog {
+  padding: calc(var(--bre-pad, 10px) * 1.2);
+  gap: calc(var(--bre-pad, 10px) * 0.8);
+}
+.bre-brew-link-input {
+  padding: calc(var(--bre-pad, 10px) * 0.6) calc(var(--bre-pad, 10px) * 0.8);
+  border: 1px solid var(--bre-border, color-mix(in srgb, CanvasText 30%, transparent));
+  border-radius: var(--bre-radius, 0);
+}
+.bre-brew-link-actions {
+  gap: calc(var(--bre-pad, 10px) * 0.6);
+}
+.bre-brew-link-remove {
+  margin-inline-end: auto;
+}
+
+/* ── Selection outline + drag handle ───────────────────────────────────────── */
+.bre-editor [data-bre-selected] {
+  border-radius: var(--bre-radius, 0);
+}
+.bre-drag-handle {
+  opacity: 0.4;
+  padding-inline-end: 6px;
+}
+/* Reserve room for the handle inside the editor instead of overflowing the page.
+   The bottom padding is a click target: clicking the empty space below the last
+   block moves the caret there (or adds a line when the last block can't take text). */
+.bre-editor[data-bre-mode="BRE"] {
+  padding-inline-start: var(--bre-gutter, 1.75em);
+  padding-bottom: var(--bre-tail, 3em);
+  min-height: var(--bre-min-height, 300px);
+  box-sizing: border-box;
+}
+.bre-editor[data-bre-mode="BRE"] .bre-drag-handle {
+  inset-inline-start: var(--bre-gutter, 1.75em);
+}
+
+/* ── Layout containers: tables and columns ─────────────────────────────────── */
+.bre-table th,
+.bre-table td {
+  padding: calc(var(--bre-pad, 10px) * 0.6) var(--bre-pad, 10px);
+}
+.bre-column {
+  padding: calc(var(--bre-pad, 10px) * 0.4) calc(var(--bre-pad, 10px) * 0.8);
+  border: 1px solid var(--bre-border, color-mix(in srgb, CanvasText 18%, transparent));
+  border-radius: var(--bre-radius, 0);
+  margin-inline: calc(var(--bre-pad, 10px) * 0.4);
+}
+
+/* ── BREW toolbar + writing areas ──────────────────────────────────────────── */
+.bre-brew-toolbar {
+  gap: 4px;
+  padding: calc(var(--bre-pad, 10px) * 0.8) calc(var(--bre-pad, 10px) * 1.2);
+  border-bottom: 1px solid var(--bre-border, color-mix(in srgb, CanvasText 18%, transparent));
+  background: var(--bre-surface, Canvas);
+}
+.bre-brew-btn,
+.bre-brew-block-type {
+  border: 1px solid transparent;
+  background: none;
+  padding: calc(var(--bre-pad, 10px) * 0.4) calc(var(--bre-pad, 10px) * 0.8);
+}
+.bre-brew-btn[data-active="true"] {
+  background: var(--bre-accent, CanvasText);
+  color: var(--bre-accent-text, Canvas);
+}
+.bre-brew-surface {
+  min-height: var(--bre-min-height, 300px);
+  padding-bottom: var(--bre-tail, 3em);
+  box-sizing: border-box;
+}
+.bre-brem-textarea,
+.bre-brem-preview {
+  min-height: var(--bre-min-height, 300px);
+}
+.bre-brem-textarea {
+  font-family: monospace;
+}
+.bre-brem-toggle {
+  margin: calc(var(--bre-pad, 10px) * 0.8);
+  padding: calc(var(--bre-pad, 10px) * 0.2) var(--bre-pad, 10px);
+}
+.bre-editor[data-bre-dragover] {
+  outline: 2px dashed var(--bre-focus, Highlight);
+  outline-offset: 2px;
+}

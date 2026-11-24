@@ -15,14 +15,17 @@
 
 import { loadKaTeX, getKaTeX, ensureKaTeXStyles } from '../utils/katex-lazy.js';
 import { generateId } from '../utils/id.js';
-import { escapeHTML } from '../utils/dom.js';
+import { escapeHTML, caretAtEdge } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
+import { createDialogs } from '../ui/dialog.js';
+import { cleanBlock } from '../utils/docHygiene.js';
 import { EventEmitter } from '../core/events.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 import { markdownToBlocks } from '../utils/markdown.js';
 import { blockToHTML, isSimpleInlineHTML } from '../utils/blocksToHTML.js';
 import { cleanPastedHTML } from '../utils/pasteClean.js';
+import { imageFiles, pastedImages, splitFirst, uploadOne, altFromFile, pickImageFiles, trackFileDrag } from '../utils/imageUpload.js';
 
 // Ensure all block plugins are registered (same as editor.js)
 import '../blocks/paragraph.js';
@@ -63,6 +66,12 @@ export const DEFAULT_MESSAGES = {
   formula: 'Insert formula',
   table: 'Insert table',
   image: 'Insert image',
+  uploading: 'Uploading image…',
+  uploadFailed: 'Image upload failed',
+  uploadNotConfigured: 'Image upload is not configured',
+  uploadTooLarge: 'Image is too large',
+  uploadOneAtATime: 'Upload one image at a time',
+  invalidUrl: 'Invalid or unsafe URL.',
   audio: 'Insert audio',
   video: 'Insert video',
   linkDialog: 'Link',
@@ -87,9 +96,11 @@ export const DEFAULT_MESSAGES = {
   addCol: '+ Col',
   delCol: '− Col',
   delTable: 'Delete table',
+  mediaEdit: 'Edit',
   formulaDialog: 'Edit formula',
   formulaPlaceholder: 'LaTeX, e.g. E = mc^2',
   blockSelected: 'Block selected. Press Delete to remove it, Enter to edit.',
+  blockDeleted: 'Block deleted',
   tableHeader: 'Header',
   tableCell: 'Cell',
   invalidDocument: 'Invalid document',
@@ -109,24 +120,60 @@ function escText(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const VOID_TAGS = new Set(['br', 'hr', 'img', 'wbr', 'source', 'track', 'col', 'area', 'input']);
+const RAW_TEXT_TAGS = new Set(['script', 'style', 'textarea', 'title', 'noscript', 'iframe', 'xmp', 'plaintext', 'template', 'svg', 'math']);
+
+/**
+ * True if every tag in the fragment is opened and closed in order, with nothing
+ * odd (comments, raw-text elements, stray '<'). Only such fragments are safe to
+ * batch: an unclosed <a> or <b> would otherwise swallow the NEXT block's content.
+ */
+function isBalanced(h) {
+  if (h.indexOf('<') === -1) return true;
+  const stack = [];
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^<>]*)?>/g;
+  let rest = h;
+  let m;
+  while ((m = re.exec(h)) !== null) {
+    const name = m[2].toLowerCase();
+    if (RAW_TEXT_TAGS.has(name)) return false;
+    rest = rest.replace(m[0], '');
+    if (m[1]) {
+      if (stack.pop() !== name) return false;
+    } else if (!VOID_TAGS.has(name) && !/\/>$/.test(m[0])) {
+      stack.push(name);
+    }
+  }
+  return stack.length === 0 && rest.indexOf('<') === -1;
+}
+
 /**
  * Sanitize many HTML fragments with ONE DOMPurify call (per-call overhead
- * dominates for big docs). Fragments are wrapped in <div>s; if the wrapper
- * structure doesn't survive (a fragment tried to break out) every fragment is
- * sanitized individually instead.
+ * dominates for big docs). Fragments are wrapped in <div>s. Only balanced
+ * fragments join the batch; anything else — and the whole batch if the wrapper
+ * structure doesn't survive — is sanitized individually, so one block's markup
+ * can never leak into, or consume, another block.
  */
 function sanitizeBatch(htmls, options) {
   const n = htmls.length;
   if (n === 0) return [];
-  const t = document.createElement('template');
-  t.innerHTML = sanitizeHTML(`<div>${htmls.join('</div><div>')}</div>`, options); // sanitized
-  const kids = Array.from(t.content.children);
-  if (kids.length === n && kids.every(k => k.nodeName === 'DIV')) {
-    const out = new Array(n);
-    for (let i = 0; i < n; i++) out[i] = kids[i].innerHTML;
-    return out;
+  const out = new Array(n);
+  const batchIdx = [];
+  for (let i = 0; i < n; i++) {
+    if (isBalanced(htmls[i])) batchIdx.push(i);
+    else out[i] = sanitizeHTML(htmls[i], options);
   }
-  return htmls.map(h => sanitizeHTML(h, options));
+  if (batchIdx.length) {
+    const t = document.createElement('template');
+    t.innerHTML = sanitizeHTML(`<div>${batchIdx.map(i => htmls[i]).join('</div><div>')}</div>`, options); // sanitized
+    const kids = Array.from(t.content.children);
+    if (kids.length === batchIdx.length && kids.every(k => k.nodeName === 'DIV')) {
+      batchIdx.forEach((i, k) => { out[i] = kids[k].innerHTML; });
+    } else {
+      for (const i of batchIdx) out[i] = sanitizeHTML(htmls[i], options);
+    }
+  }
+  return out;
 }
 
 /**
@@ -203,7 +250,7 @@ export function createBrewEditor(container, options = {}) {
   const cleanups = [];
   for (const [ev, fn] of [
     ['change', opts.onChange], ['ready', opts.onReady], ['focus', opts.onFocus],
-    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange],
+    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange], ['error', opts.onError],
   ]) {
     if (typeof fn === 'function') cleanups.push(emitter.on(ev, fn));
   }
@@ -216,7 +263,13 @@ export function createBrewEditor(container, options = {}) {
   let destroyed = false;
   let changeTimer = null;
   let selRaf = null;
-  let activeDialog = null;
+  const dialogs = createDialogs({
+    getRoot: () => root,
+    messages,
+    fallbackEls: () => [toolbar, surface],
+    focusEl: () => surface,
+    isDestroyed: () => destroyed,
+  });
 
   let _docMeta = { id: generateId(), version: 1, created: Date.now(), updated: Date.now() };
 
@@ -333,6 +386,14 @@ export function createBrewEditor(container, options = {}) {
   }
 
   /** Complex (non-text) block -> HTML snippet string. */
+  // Edit / Remove buttons under each media block. Needed because embeds (iframes)
+  // swallow clicks and a native <video> double-click toggles fullscreen.
+  function mediaControls(type) {
+    // aria-label adds context: several blocks can each have an "Edit" and a "Remove".
+    const b = (a, label) => `<button type="button" class="bre-table-btn" data-bre-media-action="${a}" aria-label="${escapeHTML(label + ' ' + type)}">${escapeHTML(label)}</button>`;
+    return `<div class="bre-media-controls" contenteditable="false"${readOnly ? ' hidden' : ''}>${b('edit', messages.mediaEdit)}${b('remove', messages.remove)}</div>`;
+  }
+
   function snippetFor(block, id) {
     const d = block.data || {};
     switch (block.type) {
@@ -348,32 +409,33 @@ export function createBrewEditor(container, options = {}) {
       }
       case 'table': {
         const rows = Array.isArray(d.rows) && d.rows.length ? d.rows : [['', ''], ['', '']];
-        const [headerRow, ...bodyRows] = rows;
+        const hasHeader = d.hasHeader !== false;
+        const [headerRow, ...bodyRows] = hasHeader ? rows : [null, ...rows];
         const makeCell = (tag, content, rowIdx, colIdx) => {
-          const ph = rowIdx === 0 ? messages.tableHeader : messages.tableCell;
+          const ph = tag === 'th' ? messages.tableHeader : messages.tableCell;
           return `<${tag} class="bre-table-cell" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-table-row="${rowIdx}" data-bre-table-col="${colIdx}" data-bre-placeholder="${escapeHTML(ph)}">${escapeHTML(String(content ?? ''))}</${tag}>`;
         };
         const th = headerRow ? `<thead><tr>${headerRow.map((c, ci) => makeCell('th', c, 0, ci)).join('')}</tr></thead>` : '';
         const tb = bodyRows.length
-          ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1, ci)).join('')}</tr>`).join('')}</tbody>`
+          ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1 + (hasHeader ? 0 : -1), ci)).join('')}</tr>`).join('')}</tbody>`
           : '';
         const btn = (a, label) => `<button type="button" class="bre-table-btn" data-bre-table-action="${a}">${escapeHTML(label)}</button>`;
         const controls = `<div class="bre-table-controls"${readOnly ? ' hidden' : ''}>${btn('add-row', messages.addRow)}${btn('del-row', messages.delRow)}${btn('add-col', messages.addCol)}${btn('del-col', messages.delCol)}${btn('del-block', messages.delTable)}</div>`;
-        return `<div data-bre-type="table" data-bre-id="${id}" data-bre-block-id="${id}" contenteditable="false" class="bre-table-wrapper"><table class="bre-table">${th}${tb}</table>${controls}</div>`;
+        return `<div data-bre-type="table" data-bre-id="${id}" data-bre-block-id="${id}" contenteditable="false" class="bre-table-wrapper"${hasHeader ? '' : ' data-bre-header="false"'}><table class="bre-table">${th}${tb}</table>${controls}</div>`;
       }
       case 'image': {
         const src = d.src || '';
         const inner = src
           ? `<img class="bre-image" src="${escapeHTML(src)}" alt="${escapeHTML(d.alt || '')}" loading="lazy">`
           : `<div class="bre-image-placeholder">${escapeHTML(messages.imagePlaceholder)}</div>`;
-        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="image" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-alt="${escapeHTML(d.alt || '')}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-image-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls('image')}</figure>`;
       }
       case 'audio': {
         const src = d.src || '';
         const inner = src
           ? `<audio class="bre-audio" controls src="${escapeHTML(src)}"></audio>`
           : `<div class="bre-audio-placeholder">${escapeHTML(messages.audioPlaceholder)}</div>`;
-        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="audio" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-audio-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls('audio')}</figure>`;
       }
       case 'video': {
         const src = d.src || '';
@@ -382,7 +444,7 @@ export function createBrewEditor(container, options = {}) {
         if (!src) inner = `<div class="bre-video-placeholder">${escapeHTML(messages.videoPlaceholder)}</div>`;
         else if (embedUrl) inner = `<iframe class="bre-video-embed" src="${escapeHTML(embedUrl)}" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="strict-origin-when-cross-origin" loading="lazy" allowfullscreen></iframe>`;
         else inner = `<video class="bre-video" controls src="${escapeHTML(src)}"></video>`;
-        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption></figure>`;
+        return `<figure data-bre-type="video" data-bre-id="${id}" data-bre-block-id="${id}" data-bre-src="${escapeHTML(src)}" data-bre-caption="${escapeHTML(d.caption || '')}" contenteditable="false" class="bre-video-block">${inner}<figcaption class="bre-media-caption" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-placeholder="${escapeHTML(messages.caption)}">${escapeHTML(d.caption || '')}</figcaption>${mediaControls('video')}</figure>`;
       }
       default:
         return '';
@@ -407,7 +469,7 @@ export function createBrewEditor(container, options = {}) {
           : (b.data && Array.isArray(b.data.children)) ? b.data.children : [];
         for (const col of cols) normalizeBlocks(Array.isArray(col) ? col : [], out);
       } else {
-        out.push(b);
+        out.push(cleanBlock(b));
       }
     }
     return out;
@@ -591,7 +653,9 @@ export function createBrewEditor(container, options = {}) {
               if (row.length) rows.push(row);
             }
           }
-          return { id, type: 'table', data: { rows } };
+          const data = { rows };
+          if (node.getAttribute('data-bre-header') === 'false') data.hasHeader = false;
+          return { id, type: 'table', data };
         }
         // Chrome wraps new lines in divs — treat as paragraph
         return { id, type: 'paragraph', data: { html: inlineHTMLOf(node) } };
@@ -638,6 +702,8 @@ export function createBrewEditor(container, options = {}) {
     const seen = new Set();
     const units = [];
     const visit = (node, listTag) => {
+      // Upload placeholders are transient UI, never part of the document.
+      if (node.nodeType === 1 && node.hasAttribute('data-bre-upload')) return;
       let e = cache.get(node);
       if (!e || e.dirty || e.list !== listTag) {
         const block = readUnit(node, listTag);
@@ -842,97 +908,17 @@ export function createBrewEditor(container, options = {}) {
 
   // ── Dialogs ────────────────────────────────────────────────────────────────
 
-  /**
-   * Generic small inline dialog. Esc closes and returns focus (and selection)
-   * to the surface; Enter confirms. `fields`: [{ key, type, placeholder, value }].
-   * `onSave(values)` runs after `validate(values)` returns no invalid keys.
-   */
-  function openDialog({ className, label, fields, savedRange, validate, onSave, onRemove }) {
-    if (activeDialog) activeDialog.close(false);
+  // Shared with BRE (src/ui/dialog.js): positioning, Esc/Enter, outside-click, focus return.
+  const openDialog = (cfg) => dialogs.open(cfg);
 
-    const dialog = document.createElement('div');
-    dialog.className = className;
-    dialog.setAttribute('role', 'dialog');
-    dialog.setAttribute('aria-label', label);
-
-    const inputs = {};
-    for (const f of fields) {
-      const input = document.createElement('input');
-      input.type = f.type || 'text';
-      input.placeholder = f.placeholder;
-      input.setAttribute('aria-label', f.placeholder);
-      input.value = f.value || '';
-      input.className = 'bre-brew-link-input';
-      dialog.appendChild(input);
-      inputs[f.key] = input;
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'bre-brew-link-actions';
-    const mk = (text, cls) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = text;
-      b.className = cls;
-      return b;
-    };
-    const saveBtn = mk(messages.save, 'bre-brew-link-save');
-    const cancelBtn = mk(messages.cancel, 'bre-brew-link-cancel');
-    if (onRemove) {
-      const removeBtn = mk(messages.remove, 'bre-brew-link-remove');
-      removeBtn.addEventListener('click', () => { close(true); onRemove(); });
-      actions.appendChild(removeBtn);
-    }
-    actions.append(cancelBtn, saveBtn);
-    dialog.appendChild(actions);
-
-    let outsideTimer = null;
-    const outside = (e) => { if (!dialog.contains(e.target)) close(false); };
-
-    function close(restoreFocus) {
-      clearTimeout(outsideTimer);
-      document.removeEventListener('mousedown', outside);
-      dialog.remove();
-      if (activeDialog && activeDialog.dialog === dialog) activeDialog = null;
-      if (restoreFocus && !destroyed) {
-        surface.focus();
-        if (savedRange) {
-          const s = window.getSelection();
-          s.removeAllRanges();
-          s.addRange(savedRange);
-        }
-      }
-    }
-
-    saveBtn.addEventListener('click', () => {
-      const values = {};
-      for (const k of Object.keys(inputs)) values[k] = inputs[k].value.trim();
-      for (const input of Object.values(inputs)) input.removeAttribute('aria-invalid');
-      const bad = validate ? validate(values) : [];
-      if (bad.length) {
-        for (const k of bad) inputs[k].setAttribute('aria-invalid', 'true');
-        inputs[bad[0]].focus();
-        return;
-      }
-      close(true);
-      onSave(values);
-    });
-    cancelBtn.addEventListener('click', () => close(true));
-    dialog.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
-      else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); saveBtn.click(); }
-    });
-
-    root.appendChild(dialog);
-    // Deferred: the mousedown that opened the dialog is still bubbling.
-    outsideTimer = setTimeout(() => document.addEventListener('mousedown', outside), 0);
-    activeDialog = { dialog, close };
-    const first = Object.values(inputs)[0];
-    if (first) first.focus();
-  }
-
-  function openLinkDialog({ text, url }, savedRange, onSave, onRemove) {
+  function openLinkDialog({ text, url }, savedRange, onSave, onRemove, anchor) {
+    // Like the formula dialog: just below the line, spanning the whole block it belongs to.
+    const at = anchor || (savedRange && savedRange.startContainer);
+    const el = at && at.nodeType === 3 ? at.parentNode : at;
+    const block = el && el.nodeType === 1 && surface.contains(el) ? topLevelBlockOf(el) : null;
     openDialog({
+      anchor: block || anchor,
+      spanWidth: !!block,
       className: 'bre-brew-link-dialog',
       label: messages.linkDialog,
       savedRange,
@@ -951,13 +937,16 @@ export function createBrewEditor(container, options = {}) {
     });
   }
 
-  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave, onRemove) {
+  function openMediaDialog({ src, alt, caption, type }, savedRange, onSave, onRemove, anchor) {
     const fields = [{
       key: 'src', placeholder: type === 'image' ? messages.imageUrl : type === 'audio' ? messages.audioUrl : messages.videoUrl, value: src,
     }];
     if (type === 'image') fields.push({ key: 'alt', placeholder: messages.altText, value: alt });
     fields.push({ key: 'caption', placeholder: messages.caption, value: caption });
     openDialog({
+      anchor,
+      atCorner: !!anchor,
+      spanWidth: !!anchor,
       className: 'bre-brew-link-dialog bre-brew-media-dialog',
       label: messages.mediaDialog,
       savedRange,
@@ -1086,10 +1075,13 @@ export function createBrewEditor(container, options = {}) {
       const tbody = table.querySelector('tbody');
       if (!tbody) return;
       const rows = tbody.querySelectorAll('tr');
-      if (rows.length > 0) rows[rows.length - 1].remove();
+      // A headerless table must keep at least one row.
+      const keep = table.querySelector('thead') ? 0 : 1;
+      if (rows.length > keep) rows[rows.length - 1].remove();
     } else if (action === 'add-col') {
       table.querySelectorAll('tr').forEach((tr, ri) => {
-        tr.appendChild(makeCell(ri === 0 ? 'th' : 'td', ri === 0 ? messages.tableHeader : messages.tableCell));
+        const head = tr.parentNode && tr.parentNode.nodeName === 'THEAD';
+        tr.appendChild(makeCell(head ? 'th' : 'td', head ? messages.tableHeader : messages.tableCell));
       });
       reindexTable(table);
     } else if (action === 'del-col') {
@@ -1099,6 +1091,168 @@ export function createBrewEditor(container, options = {}) {
       });
     }
   }
+
+  // ── Image upload ───────────────────────────────────────────────────────────
+  // One image per action. A transient placeholder (never serialized) marks the spot,
+  // then it is replaced by the image figure, or removed on failure / if the user deleted it.
+
+  const TEXT_BLOCK = /^(P|H[1-6]|BLOCKQUOTE)$/;
+
+  function caretRangeAt(x, y) {
+    let r = null;
+    try {
+      if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y);
+      else if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); }
+      }
+    } catch (_) { r = null; }
+    return r && surface.contains(r.startContainer) ? r : null;
+  }
+
+  /** Place `el` (a block element) at `range`, splitting a text block around the caret. */
+  function placeBlockAt(el, range) {
+    // A selected range is replaced by the image (like typing over a selection).
+    if (range && !range.collapsed && surface.contains(range.startContainer) && surface.contains(range.endContainer)) {
+      range.deleteContents();
+      range.collapse(true);
+    }
+    let top = range && range.startContainer;
+    while (top && top.parentNode !== surface) top = top.parentNode;
+    if (!top || !top.isConnected) { surface.appendChild(el); return; }
+    // A caret inside a non-editable atom (formula, upload placeholder, figure) must not be split:
+    // snap to after the block that holds it.
+    const at = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    if (at && at.closest && at.closest('[data-bre-upload], [contenteditable="false"], [data-bre-type="formula"]') &&
+        surface.contains(at) && at !== surface) { top.after(el); return; }
+    const hasContent = (n) => !!((n.textContent || '').trim() || (n.querySelector && n.querySelector('img, figure, [data-bre-type]')));
+    const isText = top.nodeType === 1 && TEXT_BLOCK.test(top.nodeName);
+    if (isText && !hasContent(top)) { surface.replaceChild(el, top); return; }
+    if (isText) {
+      const tail = document.createRange();
+      tail.setStart(range.startContainer, range.startOffset);
+      tail.setEndAfter(top.lastChild);
+      const frag = tail.extractContents();
+      const after = top.cloneNode(false);
+      after.removeAttribute('data-bre-id');
+      after.removeAttribute('data-bre-block-id');
+      after.appendChild(frag);
+      const headEmpty = !hasContent(top);
+      const tailEmpty = !hasContent(after);
+      if (headEmpty) { surface.replaceChild(el, top); } else { top.after(el); }
+      if (!tailEmpty) el.after(after);
+      return;
+    }
+    top.after(el);
+  }
+
+  // Upload undo. The browser's undo can't see our direct DOM writes, so each finished upload that is the
+  // most recent change keeps a before/after snapshot of the surface and handles Undo / Redo itself.
+  // Anything else (typing since, overlapping or failed uploads, a new document) is left to the browser.
+  const uploadUndo = { undo: [], redo: [] };
+  const MAX_UPLOAD_UNDO = 20;
+  let editGen = 0;       // bumped by user input and by loading a document
+  let uploadEpoch = 0;   // bumped when an upload starts
+  let uploadsActive = 0;
+  const snapshotSurface = () => Array.from(surface.childNodes, (n) => n.cloneNode(true));
+  function resetUploadUndo() { uploadUndo.undo.length = 0; uploadUndo.redo.length = 0; editGen++; }
+  function caretIn(el, atEnd) {
+    if (!el) return;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(!atEnd);
+    const sel = window.getSelection();
+    if (sel) { sel.removeAllRanges(); sel.addRange(r); }
+  }
+
+  /** Apply the most recent upload undo/redo entry. Returns false when there is none (browser handles it). */
+  function uploadHistory(redo) {
+    if (readOnly) return false;
+    const entry = (redo ? uploadUndo.redo : uploadUndo.undo).pop();
+    if (!entry) return false;
+    surface.replaceChildren(...(redo ? entry.after : entry.before).map((n) => n.cloneNode(true)));
+    (redo ? uploadUndo.undo : uploadUndo.redo).push(entry);
+    const kids = surface.children;
+    caretIn(redo ? kids[entry.figureIndex + 1] || kids[entry.figureIndex] : kids[entry.figureIndex - 1] || kids[0], !redo);
+    scheduleChange();
+    return true;
+  }
+
+  // The keyboard shortcut is caught on keydown: with an empty native history the browser fires no
+  // `beforeinput` at all. `beforeinput` still covers Edit → Undo in the browser menu.
+  listen(surface, 'keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = String(e.key).toLowerCase();
+    if ((k === 'z' || k === 'y') && uploadHistory(k === 'y' || e.shiftKey)) e.preventDefault();
+  });
+  listen(surface, 'beforeinput', (e) => {
+    if ((e.inputType === 'historyUndo' || e.inputType === 'historyRedo') && uploadHistory(e.inputType === 'historyRedo')) e.preventDefault();
+  });
+
+  async function uploadFiles(files, range) {
+    if (destroyed || readOnly) return;
+    const { first, extra } = splitFirst(files);
+    if (!first) return;
+    if (extra.length) emitter.emit('error', { type: 'upload', error: new Error(messages.uploadOneAtATime), file: extra[0] });
+    if (typeof opts.uploadImage !== 'function') {
+      emitter.emit('error', { type: 'upload', error: new Error(messages.uploadNotConfigured), file: first });
+      return;
+    }
+    const ph = document.createElement('p');
+    ph.className = 'bre-upload-placeholder';
+    ph.setAttribute('data-bre-upload', generateId());
+    ph.setAttribute('contenteditable', 'false');
+    ph.textContent = messages.uploading;
+    const solo = uploadsActive === 0;
+    const epoch = ++uploadEpoch;
+    const gen0 = editGen;
+    const before = solo ? snapshotSurface() : null;
+    uploadsActive++;
+    placeBlockAt(ph, range && range.startContainer && range.startContainer.isConnected ? range : null);
+    announce(messages.uploading);
+    scheduleChange();
+    try {
+      const src = await uploadOne(first, { hook: opts.uploadImage, maxSize: opts.uploadMaxSize, messages });
+      if (destroyed) return;
+      if (!ph.isConnected) return; // user removed it, or the document was replaced
+      if (readOnly) { ph.remove(); return; } // went read-only meanwhile: insert nothing
+      const id = generateId();
+      const node = snippetToNode(snippetFor({ type: 'image', data: { src, alt: altFromFile(first), caption: '' } }, id));
+      if (!node) throw new Error(messages.uploadFailed);
+      ph.replaceWith(node);
+      if (!node.nextElementSibling) {
+        const p = document.createElement('p');
+        p.appendChild(document.createElement('br'));
+        node.after(p);
+      }
+      if (before && epoch === uploadEpoch && gen0 === editGen) {
+        uploadUndo.undo.push({ before, after: snapshotSurface(), figureIndex: Array.prototype.indexOf.call(surface.children, node) });
+        if (uploadUndo.undo.length > MAX_UPLOAD_UNDO) uploadUndo.undo.shift();
+        uploadUndo.redo.length = 0;
+      }
+      scheduleChange();
+    } catch (error) {
+      if (destroyed) return;
+      ph.remove();
+      scheduleChange();
+      emitter.emit('error', { type: 'upload', error, file: first });
+      announce(messages.uploadFailed);
+    } finally {
+      uploadsActive--;
+    }
+  }
+
+  const hasFileDrag = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+  listen(root, 'dragover', (e) => { if (hasFileDrag(e)) e.preventDefault(); });
+  listen(root, 'drop', (e) => {
+    const dt = e.dataTransfer;
+    if (!dt || !(dt.files && dt.files.length)) return;
+    e.preventDefault(); // never let the browser navigate to, or paste, a dropped file
+    if (readOnly) return;
+    const imgs = imageFiles(dt.files);
+    if (imgs.length) uploadFiles(imgs, caretRangeAt(e.clientX, e.clientY) || currentRange());
+  });
+  cleanups.push(trackFileDrag(root, () => !readOnly));
 
   function insertMediaBlock(block) {
     const id = generateId();
@@ -1127,14 +1281,19 @@ export function createBrewEditor(container, options = {}) {
       ));
       if (node && figureEl.parentNode) figureEl.parentNode.replaceChild(node, figureEl);
       scheduleChange();
-    }, () => removeBlockEl(figureEl));
+    }, () => removeBlockEl(figureEl), figureEl);
   }
 
   for (const [btn, type] of [[btnImage, 'image'], [btnAudio, 'audio'], [btnVideo, 'video']]) {
-    const open = (e) => {
+    const open = async (e) => {
       e.preventDefault();
       if (readOnly) return;
       const savedRange = currentRange();
+      if (type === 'image' && typeof opts.uploadImage === 'function') {
+        const picked = await pickImageFiles(root);
+        if (picked.length) uploadFiles(picked, savedRange);
+        return;
+      }
       openMediaDialog({ src: '', alt: '', caption: '', type }, savedRange, ({ src, alt, caption }) => {
         insertMediaBlock({ type, data: { src, alt, caption } });
       });
@@ -1145,8 +1304,52 @@ export function createBrewEditor(container, options = {}) {
 
   // ── Surface click: links, table controls, media, formulas ───────────────────
 
+  // ── Add a line after a non-text last block ─────────────────────────────────
+  const CARET_TAGS = /^(P|H[1-6]|UL|OL|BLOCKQUOTE)$/;
+  const NON_TEXT_TYPES = new Set(['image', 'audio', 'video', 'table', 'divider', 'code']);
+  /** A block you can put the caret in and type after (not media/table/divider/code). */
+  const isTextBlock = (el) => !!el && CARET_TAGS.test(el.nodeName) && !NON_TEXT_TYPES.has(el.getAttribute('data-bre-type') || '');
+
+  function placeCaret(el, atEnd) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(!atEnd);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  /**
+   * Clicking the empty space below the last block: if the document ends in
+   * something you can't type after (image, table, divider, code…), add a fresh
+   * paragraph there; otherwise just put the caret at the end.
+   */
+  function focusEnd() {
+    clearBlockSelection();
+    surface.focus();
+    const last = surface.lastElementChild;
+    if (isTextBlock(last)) {
+      placeCaret(last, true);
+      return;
+    }
+    appendParagraphAtEnd();
+  }
+
+  function appendParagraphAtEnd() {
+    // Direct DOM insert: execCommand('insertHTML') with the caret after a
+    // non-editable block behaves differently across browsers (it can nest the
+    // paragraph inside the previous block), so don't rely on it here.
+    const p = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    surface.appendChild(p);
+    placeCaret(p, false);
+    scheduleChange();
+  }
+
   listen(surface, 'click', (e) => {
     if (readOnly) return; // links navigate natively, nothing else is interactive
+    if (e.target === surface) { focusEnd(); return; }
 
     const anchorEl = e.target.closest('a');
     if (anchorEl && surface.contains(anchorEl)) {
@@ -1162,7 +1365,19 @@ export function createBrewEditor(container, options = {}) {
           anchorEl.replaceWith(document.createTextNode(anchorEl.textContent || ''));
           scheduleChange();
         },
+        anchorEl,
       );
+      return;
+    }
+
+    const mediaActionBtn = e.target.closest('[data-bre-media-action]');
+    if (mediaActionBtn && surface.contains(mediaActionBtn)) {
+      e.preventDefault();
+      const fig = mediaActionBtn.closest('figure[data-bre-type]');
+      if (fig) {
+        if (mediaActionBtn.getAttribute('data-bre-media-action') === 'remove') removeBlockEl(fig);
+        else showMediaDialog(fig);
+      }
       return;
     }
 
@@ -1192,6 +1407,12 @@ export function createBrewEditor(container, options = {}) {
     openFormulaDialog(formulaEl);
   });
 
+  // Controls are shown only while their block has focus; Safari/Firefox don't focus a
+  // <button> on mousedown, so keep focus where it is or the controls hide before the click.
+  listen(surface, 'mousedown', (e) => {
+    if (e.target.closest && e.target.closest('[data-bre-table-action], [data-bre-media-action]')) e.preventDefault();
+  });
+
   // Double-click a media block to edit its source / alt / caption.
   listen(surface, 'dblclick', (e) => {
     if (readOnly) return;
@@ -1205,18 +1426,38 @@ export function createBrewEditor(container, options = {}) {
   // ── Block selection + deletion (media, divider, table, formula) ────────────
   let selectedBlockEl = null;
 
+  // Screen-reader announcements (created on first use).
+  let liveRegion = null;
+  function announce(msg) {
+    if (!liveRegion) {
+      liveRegion = document.createElement('div');
+      liveRegion.className = 'bre-sr-only';
+      liveRegion.setAttribute('role', 'status');
+      liveRegion.setAttribute('aria-live', 'polite');
+      root.appendChild(liveRegion);
+    }
+    liveRegion.textContent = '';
+    requestAnimationFrame(() => { if (!destroyed && liveRegion) liveRegion.textContent = msg; });
+  }
+
   function selectBlockEl(el) {
     if (selectedBlockEl && selectedBlockEl !== el) clearBlockSelection();
     selectedBlockEl = el;
     el.setAttribute('data-bre-selected', '');
     el.setAttribute('tabindex', '-1');
+    // A focusable element with no role/name would be announced as nothing useful.
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', messages.blockSelected);
     el.focus({ preventScroll: true });
+    announce(messages.blockSelected);
   }
 
   function clearBlockSelection() {
     if (!selectedBlockEl) return;
     selectedBlockEl.removeAttribute('data-bre-selected');
     selectedBlockEl.removeAttribute('tabindex');
+    selectedBlockEl.removeAttribute('role');
+    selectedBlockEl.removeAttribute('aria-label');
     selectedBlockEl = null;
   }
 
@@ -1238,10 +1479,44 @@ export function createBrewEditor(container, options = {}) {
     }
     if (el.isConnected) el.remove();
     if (!surface.firstChild) surface.replaceChildren(); // keep :empty for the placeholder
+    announce(messages.blockDeleted);
     scheduleChange();
   }
 
   listen(surface, 'keydown', (e) => {
+    // Arrow out of a table: ↓ from the last row / ↑ from the first row.
+    const tcell = !readOnly && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.shiftKey && !e.altKey
+      && e.target.closest ? e.target.closest('[data-bre-table-row]') : null;
+    if (tcell) {
+      const wrapper = tcell.closest('[data-bre-type="table"]');
+      if (wrapper) {
+        const row = parseInt(tcell.getAttribute('data-bre-table-row'), 10);
+        const last = wrapper.querySelectorAll('tr').length - 1;
+        const dir = e.key === 'ArrowDown' ? 'nextElementSibling' : 'previousElementSibling';
+        if ((e.key === 'ArrowDown' && row === last && caretAtEdge(tcell, 'end')) || (e.key === 'ArrowUp' && row === 0 && caretAtEdge(tcell, 'start'))) {
+          e.preventDefault();
+          const sib = wrapper[dir];
+          if (!sib) { if (e.key === 'ArrowDown') appendParagraphAtEnd(); }
+          else if (isTextBlock(sib)) placeCaret(sib, e.key === 'ArrowUp');
+          else selectBlockEl(sib);
+          return;
+        }
+      }
+    }
+    // ↓ / ↑ at the edge of a text block selects an adjacent image/audio/video/divider, so
+    // keyboard users can reach its Edit/Remove controls (otherwise the caret just skips it).
+    if (!readOnly && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !tcell) {
+      const blk = topLevelBlockOf(e.target);
+      if (blk && blk !== surface && blk.parentNode === surface && isTextBlock(blk)) {
+        const down = e.key === 'ArrowDown';
+        const sib = down ? blk.nextElementSibling : blk.previousElementSibling;
+        if (sib && (sib.matches('figure[data-bre-type]') || sib.nodeName === 'HR') && caretAtEdge(blk, down ? 'end' : 'start')) {
+          e.preventDefault();
+          selectBlockEl(sib);
+          return;
+        }
+      }
+    }
     // Enter in a caption commits it (no line breaks in a one-line caption).
     if (e.key === 'Enter' && e.target.closest && e.target.closest('figcaption.bre-media-caption')) {
       e.preventDefault();
@@ -1254,6 +1529,19 @@ export function createBrewEditor(container, options = {}) {
     } else if (e.key === 'Escape') {
       e.preventDefault();
       clearBlockSelection();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const el = selectedBlockEl;
+      const next = e.key === 'ArrowDown' ? el.nextElementSibling : el.previousElementSibling;
+      clearBlockSelection();
+      surface.focus();
+      if (!next) {
+        if (e.key === 'ArrowDown') appendParagraphAtEnd(); else placeCaret(el, false);
+      } else if (isTextBlock(next)) {
+        placeCaret(next, e.key === 'ArrowUp');
+      } else {
+        selectBlockEl(next); // another non-text block: select it
+      }
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (['image', 'audio', 'video'].includes(selectedBlockEl.getAttribute('data-bre-type'))) showMediaDialog(selectedBlockEl);
@@ -1263,6 +1551,13 @@ export function createBrewEditor(container, options = {}) {
   listen(surface, 'focusin', (e) => {
     if (selectedBlockEl && e.target !== selectedBlockEl) clearBlockSelection();
   });
+
+  /** The direct child of the surface that contains `el` (or `el` itself). */
+  function topLevelBlockOf(el) {
+    let n = el;
+    while (n && n.parentNode && n.parentNode !== surface) n = n.parentNode;
+    return n && n.parentNode === surface ? n : el;
+  }
 
   function openFormulaDialog(formulaEl) {
     openDialog({
@@ -1282,6 +1577,10 @@ export function createBrewEditor(container, options = {}) {
         });
       },
       onRemove: () => removeBlockEl(formulaEl),
+      // Just below the formula's line, spanning that whole block (an inline
+      // formula is only a few px wide).
+      anchor: topLevelBlockOf(formulaEl),
+      spanWidth: true,
     });
   }
 
@@ -1312,6 +1611,12 @@ export function createBrewEditor(container, options = {}) {
     if (readOnly || !e.clipboardData) return;
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
+    // Image files: upload (hook set) or report (bare image paste without a hook).
+    const pastedImgs = pastedImages(e.clipboardData); // text wins over a picture on the clipboard
+    if (pastedImgs.length) {
+      uploadFiles(pastedImgs, currentRange());
+      return;
+    }
     if (html && html.trim()) {
       const safe = sanitizeHTML(cleanPastedHTML(html)); // DOMPurify after cleaning
       if (safe.replace(/<[^>]*>/g, '').trim() || /<img\b/i.test(safe)) {
@@ -1326,6 +1631,7 @@ export function createBrewEditor(container, options = {}) {
 
   listen(root, 'input', (e) => {
     if (!surface.contains(e.target)) return; // ignore dialog inputs
+    resetUploadUndo(); // the user edited: the browser's undo owns history from here
     // Keep the surface truly :empty when blank so the placeholder CSS can match.
     if (surface.childNodes.length === 1) {
       const n = surface.firstChild;
@@ -1407,7 +1713,7 @@ export function createBrewEditor(container, options = {}) {
     for (const cap of surface.querySelectorAll('.bre-media-caption')) {
       cap.setAttribute('contenteditable', readOnly ? 'false' : 'true');
     }
-    for (const c of surface.querySelectorAll('.bre-table-controls')) c.hidden = readOnly;
+    for (const c of surface.querySelectorAll('.bre-table-controls, .bre-media-controls')) c.hidden = readOnly;
   }
 
   function applyReadOnly() {
@@ -1416,7 +1722,7 @@ export function createBrewEditor(container, options = {}) {
     if (readOnly) {
       toolbar.remove();
       root.setAttribute('data-bre-readonly', 'true');
-      if (activeDialog) activeDialog.close(false);
+      dialogs.closeActive(false);
     } else {
       root.removeAttribute('data-bre-readonly');
       root.insertBefore(toolbar, surface);
@@ -1445,6 +1751,7 @@ export function createBrewEditor(container, options = {}) {
       console.warn('[bre] BREW setJSON: ' + messages.invalidDocument);
       return;
     }
+    resetUploadUndo();
     clearTimeout(changeTimer);
     changeTimer = null;
     _docMeta = {
@@ -1550,7 +1857,7 @@ export function createBrewEditor(container, options = {}) {
     changeTimer = null;
     if (selRaf != null) cancelRaf(selRaf);
     selRaf = null;
-    if (activeDialog) activeDialog.close(false);
+    dialogs.closeActive(false);
     observer.disconnect();
     cleanups.forEach(fn => fn());
     cleanups.length = 0;

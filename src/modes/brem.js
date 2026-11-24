@@ -5,12 +5,13 @@
  * Note: programmatic setJSON()/setHTML() never fire 'change' — only user edits do.
  */
 import { generateId } from '../utils/id.js';
-import { sanitizeHTML, sanitizeToFragment } from '../utils/sanitize.js';
+import { sanitizeToFragment } from '../utils/sanitize.js';
 import { parseMarkdown, markdownToBlocks } from '../utils/markdown.js';
 import { blocksToMarkdown } from '../utils/blocksToMarkdown.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
 import { ensureKaTeXStyles, loadKaTeX, getKaTeX } from '../utils/katex-lazy.js';
 import { EventEmitter } from '../core/events.js';
+import { imageFiles, pastedImages, splitFirst, uploadOne, altFromFile, markdownImage, trackFileDrag } from '../utils/imageUpload.js';
 
 export const DEFAULT_MESSAGES = {
   placeholder: 'Write markdown here…',
@@ -19,6 +20,12 @@ export const DEFAULT_MESSAGES = {
   editorLabel: 'Markdown editor',
   previewLabel: 'Markdown preview',
   invalidDocument: 'Invalid document',
+  uploadingFile: 'Uploading {name}…',
+  uploadFailed: 'Image upload failed',
+  uploadNotConfigured: 'Image upload is not configured',
+  uploadTooLarge: 'Image is too large',
+  uploadOneAtATime: 'Upload one image at a time',
+  invalidUrl: 'Invalid or unsafe URL.',
 };
 
 const CHANGE_DELAY = 300;
@@ -34,7 +41,7 @@ export function createBremEditor(container, options = {}) {
   const unsubs = [];
   for (const [ev, fn] of [
     ['change', opts.onChange], ['ready', opts.onReady], ['focus', opts.onFocus],
-    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange],
+    ['blur', opts.onBlur], ['selectionchange', opts.onSelectionChange], ['error', opts.onError],
   ]) {
     if (typeof fn === 'function') unsubs.push(emitter.on(ev, fn));
   }
@@ -45,6 +52,10 @@ export function createBremEditor(container, options = {}) {
   let readOnly = !!opts.readOnly;
   let destroyed = false;
   let changeTimer = null;
+  // Sanitized render of the current markdown, shared by preview and getHTML().
+  // Valid only for the exact source and KaTeX-loaded state it was built from.
+  let renderCache = null; // { md, katex, frag }
+  const SANITIZE_OPTS = { allowKaTeX: true, allowMedia: true };
 
   let _docId = generateId();
   let _blockId = generateId();
@@ -107,9 +118,22 @@ export function createBremEditor(container, options = {}) {
     toggleBtn.setAttribute('aria-label', toggleBtn.textContent);
   }
 
+  /** Parse + sanitize once per (markdown, KaTeX state); callers must clone the result. */
+  function sanitizedFragment() {
+    const katex = !!getKaTeX();
+    if (!renderCache || renderCache.md !== markdown || renderCache.katex !== katex) {
+      renderCache = {
+        md: markdown,
+        katex,
+        frag: sanitizeToFragment(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), SANITIZE_OPTS),
+      };
+    }
+    return renderCache.frag;
+  }
+
   function renderPreview() {
     if (!markdown.trim()) { preview.replaceChildren(); return; } // :empty -> placeholder
-    preview.replaceChildren(sanitizeToFragment(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), { allowKaTeX: true, allowMedia: true }));
+    preview.replaceChildren(sanitizedFragment().cloneNode(true));
     // KaTeX loads lazily — re-render once it arrives if the text has math.
     if (!getKaTeX() && markdown.includes('$')) {
       const snapshot = markdown;
@@ -143,8 +167,115 @@ export function createBremEditor(container, options = {}) {
     textarea.value = md;
     clearTimeout(changeTimer); // programmatic loads must not emit a stale change
     changeTimer = null;
-    autoGrow();
-    if (isPreviewing || readOnly) renderPreview();
+    // The textarea is hidden while previewing; showEdit() sizes it on entry.
+    if (isPreviewing || readOnly) renderPreview(); else autoGrow();
+  }
+
+  // ── Image upload ──────────────────────────────────────────────────────────
+  // One image per action. A unique `![Uploading name…]()` placeholder is written at the
+  // caret, then swapped for the real image (or removed on failure). No bytes are embedded.
+
+  const inFlight = new Set();
+
+  function placeholderFor(file) {
+    const name = String(file.name || 'image').replace(/[\[\]\r\n]+/g, ' ').trim();
+    let candidate;
+    for (let n = 1; ; n++) {
+      const shown = n === 1 ? name : `${name} (${n})`;
+      const label = messages.uploadingFile.replace('{name}', () => shown); // function: no `$` patterns
+      candidate = `![${label}]()`;
+      if (!inFlight.has(candidate) && !textarea.value.includes(candidate)) return candidate;
+    }
+  }
+
+  /** Write `value` into the textarea + model, keeping the caret at `caret`. */
+  function setText(value, caret, caretEnd) {
+    textarea.value = value;
+    markdown = value;
+    renderCache = null;
+    if (caret != null) textarea.setSelectionRange(caret, caretEnd == null ? caret : caretEnd);
+    if (isPreviewing) renderPreview(); else autoGrow();
+    scheduleChange();
+  }
+
+  /**
+   * Replace [start, end) with `text` and leave the selection at [selStart, selEnd].
+   * While the textarea is focused this goes through the browser's own editing command, so
+   * the change stays on the native undo stack; otherwise (or if the command is unavailable)
+   * the value is written directly, which never steals focus.
+   */
+  function replaceRange(start, end, text, selStart, selEnd) {
+    const v = textarea.value;
+    if (document.activeElement === textarea) {
+      textarea.setSelectionRange(start, end);
+      let ok = false;
+      try { ok = text ? document.execCommand('insertText', false, text) : document.execCommand('delete'); } catch (_) { ok = false; }
+      if (ok) {
+        if (markdown !== textarea.value) { // the command's input event normally syncs this already
+          markdown = textarea.value;
+          renderCache = null;
+          scheduleChange();
+        }
+        textarea.setSelectionRange(selStart, selEnd);
+        return;
+      }
+    }
+    setText(v.slice(0, start) + text + v.slice(end), selStart, selEnd);
+  }
+
+  function insertAtCaret(text, atEnd) {
+    const v = textarea.value;
+    if (atEnd) {
+      const sep = v && !v.endsWith('\n') ? '\n' : '';
+      const n = v.length + sep.length + text.length;
+      replaceRange(v.length, v.length, sep + text, n, n);
+      return;
+    }
+    const s0 = textarea.selectionStart, e0 = textarea.selectionEnd;
+    replaceRange(s0, e0, text, s0 + text.length, s0 + text.length);
+  }
+
+  function replacePlaceholder(ph, next) {
+    const i = textarea.value.indexOf(ph);
+    if (i === -1) return;
+    const delta = next.length - ph.length;
+    const end = i + ph.length;
+    // Map each selection end through the replacement so a user's selection is kept.
+    const map = (pos) => (pos >= end ? pos + delta : pos > i ? i + next.length : pos);
+    replaceRange(i, end, next, map(textarea.selectionStart), map(textarea.selectionEnd));
+  }
+
+  async function uploadFiles(files, atEnd) {
+    if (destroyed || readOnly) return;
+    const { first, extra } = splitFirst(files);
+    if (!first) return;
+    if (extra.length) emitter.emit('error', { type: 'upload', error: new Error(messages.uploadOneAtATime), file: extra[0] });
+    if (typeof opts.uploadImage !== 'function') {
+      emitter.emit('error', { type: 'upload', error: new Error(messages.uploadNotConfigured), file: first });
+      return;
+    }
+    if (atEnd || isPreviewing) showEdit();
+    const ph = placeholderFor(first);
+    inFlight.add(ph);
+    insertAtCaret(ph, atEnd);
+    try {
+      const url = await uploadOne(first, { hook: opts.uploadImage, maxSize: opts.uploadMaxSize, messages });
+      if (destroyed) return;
+      if (readOnly) { // went read-only meanwhile: drop our transient placeholder, insert nothing
+        markdown = markdown.replace(ph, '');
+        textarea.value = markdown;
+        renderCache = null;
+        renderPreview();
+        return;
+      }
+      replacePlaceholder(ph, markdownImage(altFromFile(first), url));
+    } catch (error) {
+      if (destroyed) return;
+      replacePlaceholder(ph, '');
+      emitter.emit('error', { type: 'upload', error, file: first });
+    } finally {
+      inFlight.delete(ph);
+    }
   }
 
   // ── Event listeners ───────────────────────────────────────────────────────
@@ -156,9 +287,27 @@ export function createBremEditor(container, options = {}) {
 
   on(textarea, 'input', () => {
     markdown = textarea.value;
+    renderCache = null; // source changed: free the stale render
     autoGrow();
     scheduleChange();
   });
+
+  const hasFileDrag = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+  on(root, 'dragover', (e) => { if (hasFileDrag(e)) e.preventDefault(); });
+  on(root, 'drop', (e) => {
+    const dt = e.dataTransfer;
+    if (!dt || !(dt.files && dt.files.length)) return;
+    e.preventDefault(); // never let the browser navigate to a dropped file
+    const imgs = imageFiles(dt.files);
+    if (imgs.length) uploadFiles(imgs, !textarea.parentNode || textarea.hidden || e.target === preview || preview.contains(e.target));
+  });
+  on(textarea, 'paste', (e) => {
+    const imgs = pastedImages(e.clipboardData); // text wins over a picture on the clipboard
+    if (!imgs.length) return;
+    e.preventDefault();
+    uploadFiles(imgs, false);
+  });
+  unsubs.push(trackFileDrag(root, () => !readOnly));
 
   on(textarea, 'blur', () => {
     if (markdown.trim() && !readOnly) showPreview();
@@ -273,7 +422,11 @@ export function createBremEditor(container, options = {}) {
   }
 
   function getHTML() {
-    return sanitizeHTML(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), { allowKaTeX: true, allowMedia: true });
+    if (!markdown.trim()) return '';
+    // Serialising already-sanitized DOM (a read, not an innerHTML assignment).
+    const holder = document.createElement('div');
+    holder.appendChild(sanitizedFragment().cloneNode(true));
+    return holder.innerHTML;
   }
 
   function setReadOnly(v) {
@@ -301,6 +454,7 @@ export function createBremEditor(container, options = {}) {
     unsubs.forEach(u => u());
     unsubs.length = 0;
     if (emitter._listeners) emitter._listeners.clear();
+    renderCache = null;
     root.remove();
   }
 

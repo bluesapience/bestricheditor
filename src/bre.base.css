@@ -70,6 +70,16 @@
   content: none;
 }
 
+/* Table controls (add/remove row/column, delete table) show only while the
+   caret is inside the table, in BRE (.bre-table-wrapper) and BREW (data-bre-type). */
+.bre-table-controls {
+  display: none;
+}
+.bre-table-wrapper:focus-within .bre-table-controls:not([hidden]),
+[data-bre-type="table"]:focus-within .bre-table-controls:not([hidden]) {
+  display: flex;
+}
+
 /* No placeholders or edit affordances in read-only mode. */
 .bre-editor[data-bre-readonly] [data-bre-placeholder]:empty::before {
   content: none;
@@ -80,9 +90,18 @@
 }
 
 /* ── Lists ────────────────────────────────────────────────────────────── */
+/* BRE list items sit in their own block wrappers, not inside a <ul>/<ol>, so they get the same
+   hanging markers and indent as BREW/BREM lists by hand: the bullet is the native outside marker,
+   the number is a ::before hung just left of the text. Both live in the indent (--bre-list-indent). */
+.bre-bulleted-list,
+.bre-numbered-list {
+  margin-inline-start: var(--bre-list-indent, 2em);
+  position: relative;
+}
+
 .bre-bulleted-list {
   display: list-item;
-  list-style-position: inside;
+  list-style-position: outside;
 }
 
 .bre-block--numbered_list {
@@ -95,8 +114,25 @@
   counter-reset: bre-numbered;
 }
 
+/* The number is drawn by ::before, so switch off the <li>'s default bullet. */
+.bre-numbered-list {
+  list-style: none;
+}
+
 .bre-numbered-list::before {
   content: counter(bre-numbered) '. ';
+  position: absolute;
+  inset-inline-end: 100%;
+  white-space: pre;
+}
+
+/* BREW and BREM render real <ul>/<ol>. A reset such as `* { padding: 0 }` would leave their
+   markers hanging outside the editor, so keep a left indent for them (BRE draws its own markers). */
+.bre-brew-surface ul,
+.bre-brew-surface ol,
+.bre-brem-preview ul,
+.bre-brem-preview ol {
+  padding-inline-start: var(--bre-list-indent, 2em);
 }
 
 /* ── Columns ──────────────────────────────────────────────────────────── */
@@ -130,11 +166,14 @@
   border-collapse: collapse;
 }
 
-/* Cell borders are needed to see where to type. They use currentColor. */
+/* Cell borders are needed to see where to type. */
 .bre-table th,
 .bre-table td {
-  border: 1px solid;
   min-width: 5em;
+}
+.bre-table th,
+.bre-table td {
+  border: 1px solid var(--bre-border, currentColor);
 }
 
 /* ── Media ────────────────────────────────────────────────────────────── */
@@ -176,9 +215,16 @@
 .bre-brew-link-dialog {
   position: fixed;
   z-index: 9999;
-  background: Canvas;
+}
+/* Visual minimums: plain class rules so resets can't wipe them; bre.theme.css
+   loads after at equal specificity, and a host rule for the same class overrides. */
+.bre-slash-menu,
+.bre-inline-toolbar,
+.bre-brew-link-dialog,
+.bre-media-controls {
+  background: var(--bre-surface, Canvas);
   color: CanvasText;
-  border: 1px solid;
+  border: 1px solid var(--bre-border, currentColor);
 }
 
 .bre-slash-menu {
@@ -193,8 +239,8 @@
 }
 
 .bre-slash-item[data-active="true"] {
-  background: Highlight;
-  color: HighlightText;
+  background: var(--bre-accent, Highlight);
+  color: var(--bre-accent-text, HighlightText);
 }
 
 .bre-inline-toolbar {
@@ -219,9 +265,27 @@
   font-weight: bold;
 }
 
+/* BREW media Edit/Remove: float over the block's top-left corner while it is
+   selected, hovered or focused (iframes can't be click-selected, so hover counts). */
+.bre-brew-surface figure[data-bre-type] {
+  position: relative;
+}
+.bre-media-controls {
+  display: none;
+  position: absolute;
+  top: 0;
+  inset-inline-start: 0;
+  z-index: 1;
+}
+.bre-brew-surface figure[data-bre-selected] .bre-media-controls:not([hidden]),
+.bre-brew-surface figure:hover .bre-media-controls:not([hidden]),
+.bre-brew-surface figure:focus-within .bre-media-controls:not([hidden]) {
+  display: flex;
+}
+
 /* A selected non-text block (image, audio, video, divider…): Backspace/Delete removes it. */
 .bre-editor [data-bre-selected] {
-  outline: 2px solid Highlight;
+  outline: 2px solid var(--bre-focus, Highlight);
   outline-offset: 2px;
 }
 .bre-block-menu:focus {
@@ -298,6 +362,10 @@
   position: absolute;
   display: flex;
   flex-direction: column;
+}
+
+.bre-brew-link-dialog {
+  box-sizing: border-box;
 }
 
 .bre-brew-link-input {

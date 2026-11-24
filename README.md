@@ -12,7 +12,7 @@ Most rich text editors force you to pick one paradigm and stick with it. Best Ri
 
 - **Zero framework dependencies** — works with React, Vue, Svelte, Angular, or plain HTML
 - **Two runtime deps** — [DOMPurify](https://github.com/cure53/DOMPurify) (XSS sanitization) + [KaTeX](https://katex.org/) (math, loaded lazily)
-- **No visual opinions** — structural CSS only; inherits font/color/background from your app
+- **A light default look, never on your content** — the editor's own UI (menus, popups, dialogs, buttons) has a neutral default you can change with a few `--bre-*` variables or switch off (`bre-base.css`); your text, headings, lists and code always inherit from your app
 - **14 block types** — headings, lists, quotes, code, tables, images, audio, video, KaTeX formulas, multi-column layouts
 - **Fully serializable** — `getJSON()` / `setJSON()` / `getHTML()` / `setHTML()` on every mode
 - **Safe by default** — all HTML output sanitized via DOMPurify; URL injection prevented
@@ -29,7 +29,8 @@ npm install bestricheditor
 
 | Stylesheet | What it covers | How to load |
 |---|---|---|
-| `bestricheditor/dist/bre.css` | Structural editor CSS (layout, blocks, toolbar) | `import` it (ESM); auto-injected by the UMD build |
+| `bestricheditor/dist/bre.css` | Structure **+ a default look for the editor's own UI** (menus, popups, dialogs, buttons) | `import` it (ESM); auto-injected by the UMD build |
+| `bestricheditor/base.css` | Structure only — no default look at all (use instead of `bre.css`) | `import 'bestricheditor/base.css'` |
 | `bestricheditor/katex.css` | KaTeX styles + fonts (only needed if you render formulas) | `import 'bestricheditor/katex.css'` |
 
 ```js
@@ -146,7 +147,8 @@ createEditor(container, {
 | `virtualize` | `'auto' \| boolean` | `'auto'` | Virtualized rendering for large documents (BRE) |
 | `readOnly` | `boolean` | `false` | Render without editing affordances |
 | `placeholder` | `string` | - | Placeholder text for empty content |
-| `uploadImage` | `(file: File) => Promise<string>` | - | Called for pasted/dropped/picked images; resolve with the final URL |
+| `uploadImage` | `(file: File) => Promise<string>` | - | Enables image upload in BRE, BREW and BREM; resolve with the final URL. See [Image upload](#image-upload) |
+| `uploadMaxSize` | `number` | - | Largest image in bytes; bigger files are rejected before `uploadImage` runs |
 | `katexCssUrl` | `string` | - | Opt-in: inject this KaTeX stylesheet URL (nothing is injected otherwise) |
 | `messages` | `Partial<Record<string,string>>` | built-in English | Override UI strings |
 | `dir` | `'ltr' \| 'rtl' \| 'auto'` | - | Text direction |
@@ -154,6 +156,133 @@ createEditor(container, {
 TypeScript definitions ship in `types/index.d.ts`.
 
 ---
+
+## Image upload
+
+Image upload is **off until you give the editor an upload function**. The library has no backend and never embeds files as `data:` or `blob:` URLs, so your app does the actual upload and returns the final URL:
+
+```js
+createEditor(el, {
+  mode: 'BREW', // or 'BRE' / 'BREM'
+  uploadImage: async (file) => {
+    // upload `file` somewhere, then resolve its public URL
+    return 'https://cdn.example.com/photos/' + file.name;
+  },
+  uploadMaxSize: 5 * 1024 * 1024, // optional: bytes; larger files are rejected before your function runs
+  onError: ({ type, error, file }) => { if (type === 'upload') console.warn(error.message, file?.name); },
+});
+```
+
+| Mode | How a user adds an image | Where it goes |
+| --- | --- | --- |
+| **BRE** | Slash menu → *Image* (file picker), paste, or drop | Above or below the block under the pointer (upper half / lower half) |
+| **BREW** | Toolbar image button (file picker), paste, or drop | At the caret / drop point; a paragraph is split around it |
+| **BREM** | Drop or paste into the textarea | At the cursor: `![Uploading photo.png…]()` appears at once and becomes `![photo](https://…)` when the upload finishes (removed on failure) |
+
+Rules, the same in every mode:
+
+- **One image per action.** A drop, paste or pick uploads the first image only; the others are ignored and one extra `error` event reports them (so an action can emit two errors if the first image also fails). Separate actions may overlap.
+- **Text wins when pasting.** If the clipboard carries text as well as a picture (copying cells from Excel or Word does this), the text is pasted and nothing is uploaded. A bare image, or a copied web image, is uploaded.
+- Only `image/*` files are uploaded. The URL you return is sanitized (`http:`, `https:` and `mailto:` only), so a `javascript:` or `data:` URL is rejected like any other failure.
+- **Without `uploadImage`**, nothing changes for the user (the URL dialogs still work), but a dropped or pasted image file is ignored and an `error` event (`type: 'upload'`) tells you why.
+- A rejected promise, a thrown error, a non-string result, an unsafe URL or an oversize file all count as failures: the placeholder disappears, `onError` fires for that failure, and the document is left as it was. A result that arrives after the editor was destroyed, loaded another document or went read-only is discarded.
+- While an upload runs, BREW's placeholder is never part of `getJSON()` / `getHTML()` / `onChange`. In BREM the placeholder is ordinary text, so it is in the Markdown until the upload finishes.
+- Dragging files over the editor sets `data-bre-dragover="true"` on its root.
+- Add `connect-src` for your upload host to your [Content Security Policy](#content-security-policy) if you use one.
+
+### Recipes
+
+These are plain functions you copy into your app; the editor ships no storage SDKs.
+
+**Firebase Storage (with the Firebase SDK)**
+
+```js
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+const storage = getStorage();
+const uploadImage = async (file) => {
+  const path = `images/${crypto.randomUUID()}-${file.name}`;
+  const snap = await uploadBytes(ref(storage, path), file, { contentType: file.type });
+  return getDownloadURL(snap.ref);
+};
+```
+
+**Firebase Storage (REST, no SDK)**
+
+```js
+const BUCKET = 'my-app.appspot.com';
+
+const uploadImage = async (file) => {
+  const name = `images/${crypto.randomUUID()}-${file.name}`;
+  const idToken = await getIdToken(); // your auth; drop the header if your rules allow public writes
+  const res = await fetch(
+    `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o?name=${encodeURIComponent(name)}`,
+    { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Firebase ${idToken}` }, body: file },
+  );
+  if (!res.ok) throw new Error('Upload failed: ' + res.status);
+  const { name: saved, downloadTokens } = await res.json();
+  return `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/${encodeURIComponent(saved)}?alt=media&token=${downloadTokens}`;
+};
+```
+
+**Amazon S3 (presigned URL)**
+
+S3 requests must be signed with a secret key, which can never ship to a browser. Your server signs a short-lived upload URL; the browser uploads straight to S3.
+
+```js
+// Browser
+const uploadImage = async (file) => {
+  const res = await fetch('/api/s3-presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: file.name, type: file.type }),
+  });
+  if (!res.ok) throw new Error('Could not get an upload URL');
+  const { uploadUrl, url } = await res.json();
+  const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+  if (!put.ok) throw new Error('Upload failed: ' + put.status);
+  return url; // the public (or CDN) URL of the object
+};
+```
+
+```js
+// Server (Node, Express-style) — validate the type and who is asking before signing
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
+
+const s3 = new S3Client({ region: 'us-east-1' });
+const Bucket = 'my-bucket';
+
+app.post('/api/s3-presign', async (req, res) => {
+  const { name, type } = req.body;
+  if (typeof type !== 'string' || !type.startsWith('image/')) return res.status(400).end();
+  const Key = `images/${randomUUID()}-${String(name).replace(/[^\w.-]/g, '_')}`;
+  const uploadUrl = await getSignedUrl(s3, new PutObjectCommand({ Bucket, Key, ContentType: type }), { expiresIn: 60 });
+  res.json({ uploadUrl, url: `https://${Bucket}.s3.us-east-1.amazonaws.com/${Key}` });
+});
+```
+
+The bucket needs a CORS rule that allows your site to `PUT`:
+
+```json
+[{ "AllowedOrigins": ["https://your-app.example"], "AllowedMethods": ["PUT"], "AllowedHeaders": ["*"], "MaxAgeSeconds": 3000 }]
+```
+
+**Your own endpoint (multipart)**
+
+```js
+const uploadImage = async (file) => {
+  const body = new FormData();
+  body.append('file', file);
+  const res = await fetch('/api/upload', { method: 'POST', body, credentials: 'include' });
+  if (!res.ok) throw new Error('Upload failed: ' + res.status);
+  const { url } = await res.json(); // your server answers { "url": "https://…" }
+  return url;
+};
+```
+
+Pass any of these as `uploadImage`.
 
 ## API
 
@@ -270,6 +399,7 @@ editor.setJSON(doc);
 | Inline toolbar | Select text → floating toolbar appears with Bold, Italic, Underline, Code, Link buttons |
 | Keyboard splitting | `Enter` splits a block; `Backspace` at start merges |
 | Arrow navigation | `↑` / `↓` moves between blocks |
+| Add a line at the end | Click the empty space below the last block (adds a paragraph if the last block can't take text), or `↓` on a selected block / from a table's last row |
 | Undo / redo | `⌘Z` / `Ctrl+Z` and `⌘⇧Z` / `Ctrl+Shift+Z` |
 | Multi-column layout | Insert a **Columns** block (2, 3, or 4 columns); stacks on mobile |
 | Virtualized rendering | `virtualize: 'auto'` (default) for large documents; `true` / `false` to force |
@@ -296,8 +426,9 @@ Buttons shown in the floating toolbar are context-aware — only the marks suppo
 |---|---|
 | Select an image / audio / video / divider | Click it (outline, `data-bre-selected`) |
 | Delete it | `Backspace` / `Delete` (undoable with `⌘Z`); `Esc` deselects |
-| Edit media source, alt, caption | `Enter` on the selected block, or double-click; the dialog also has **Remove** |
+| Edit media source, alt, caption | **Edit** button that floats over the block's top-left corner when it is selected or hovered (works for embedded video), `Enter` on the selected block, or double-click. The dialog also has **Remove**; there is a **Remove** button under the block too |
 | Delete a table | **Delete table** button in the table controls |
+| Add a line after a non-text last block | Click the empty space below it, or press `↓` on a selected block |
 | Edit / remove a formula | Click it → dialog with **Remove** |
 
 ## BREW — WYSIWYG keyboard shortcuts
@@ -373,14 +504,49 @@ Sourcemaps (`*.map`) are published alongside every JS file. `npm run size` enfor
 
 ## Styling
 
-The library ships **no visual styling opinions**. `bre.css` contains structural CSS only (layout, positioning, hit areas) and every block inherits font, color and background from the host page. There are no theme variables: style the editor with ordinary CSS selectors on the `.bre-*` classes.
+**Content is yours; the editor's own UI has a default look.**
+
+- **Your content** (text, headings, paragraphs, lists, quotes, code, fonts, sizes) is never styled by the library — it inherits from your page.
+- **The editor's own UI** — slash menu, block menu, floating toolbar, dialogs, action buttons, the selected-block outline, table/media controls, the drag-handle gutter — gets a neutral default look from `bre.css`. It uses system colors, so it is black-on-white on a light page and inverts automatically on a dark one (`color-scheme: dark`).
+- Want none of it? Import **`bestricheditor/base.css`** instead of `bre.css`: structure only, plus the bare usability minimums (borders, an outline), all overridable.
+
+### Change the look with variables
+
+Set them on `:root` (the slash menu, block menu and floating toolbar are attached to `<body>`, so `:root` reaches everything):
 
 ```css
-.my-editor-wrapper .bre-editor { font-family: Georgia, serif; color: #222; }
-.my-editor-wrapper .bre-block--quote { border-left: 3px solid rebeccapurple; }
+:root {
+  --bre-accent: #2563eb;      /* buttons, active menu item, pressed toolbar buttons */
+  --bre-accent-text: #fff;    /* text on the accent color */
+  --bre-radius: 6px;          /* corner radius for editor UI (default: 0, square) */
+}
 ```
 
-Inspect the rendered DOM to find the class for a given element. Add padding or a max width on your own container.
+| Variable | Controls | Default |
+|---|---|---|
+| `--bre-accent` | action buttons, active menu item, pressed toolbar buttons | `CanvasText` |
+| `--bre-accent-text` | text on the accent color | `Canvas` |
+| `--bre-surface` | popup / menu / dialog background | `Canvas` |
+| `--bre-border` | hairlines around popups, tables, columns | soft `CanvasText` |
+| `--bre-radius` | corner radius of editor UI | `0` |
+| `--bre-shadow` | popup shadow | soft drop shadow |
+| `--bre-pad` | base spacing unit for editor UI | `10px` |
+| `--bre-focus` | selected-block outline color | `Highlight` |
+| `--bre-gutter` | left space for the drag handle (BRE) | `1.75em` |
+| `--bre-min-height` | writing-area height (all modes) | `300px` |
+| `--bre-tail` | clickable space below the last block (click it to add a line at the end) | `3em` |
+| `--bre-list-indent` | left indent of bulleted / numbered lists in BREW and BREM (keeps markers inside the editor under a CSS reset) | `2em` |
+
+### Or just write CSS
+
+The defaults are plain single-class selectors: strong enough that a CSS reset (`* { padding: 0 }`, Tailwind's `button { … }`) can't wipe them, and weak enough that your own rule for the same class (loaded after `bre.css`) wins — no `!important` needed. (The `--bre-*` defaults are the one exception: they sit at zero specificity, so your `:root { --bre-… }` always wins.)
+
+```css
+.bre-table-btn { background: rebeccapurple; }          /* beats the default */
+.bre-quote { border-left: 3px solid rebeccapurple; }   /* content is yours anyway */
+```
+
+Useful hooks: `.bre-block--{type}`, `[data-bre-selected]` (selected media/divider), `.bre-slash-item[data-active="true"]` (active menu item), `.bre-table-controls` (shown only while editing a table), `.bre-media-controls`, `.bre-brew-link-dialog`, `[data-bre-readonly]`. Inspect the DOM for the rest.
 
 ---
 
@@ -395,6 +561,9 @@ Inspect the rendered DOM to find the class for a given element. Add padding or a
 ---
 
 ## Security
+
+- **`getJSON()` / `onChange` / `getHTML()` output is sanitized**, so it is safe to render the `html` fields of a block or store them for others to view. (`setJSON()` accepts anything and renders it sanitized; cleaning of the returned JSON happens lazily, once per block.)
+- **`data:` URIs are never allowed** in editor HTML (images, video, links, SVG), and `javascript:` is rejected everywhere.
 
 - All HTML output sanitized by **DOMPurify** before any `innerHTML` write
 - Paste events fully sanitized regardless of source

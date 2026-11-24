@@ -19,9 +19,11 @@ import {
   escapeHTML,
   isCursorAtStart,
   isCursorAtEnd,
+  caretAtEdge,
   setCursorOffset,
 } from '../utils/dom.js';
 import { sanitizeHTML, sanitizeURL } from '../utils/sanitize.js';
+import { imageFiles, pastedImages, splitFirst, uploadOne, pickImageFiles, trackFileDrag } from '../utils/imageUpload.js';
 import { setKaTeXCssUrl, ensureKaTeXStyles, getKaTeX, loadKaTeX } from '../utils/katex-lazy.js';
 import { cleanPastedHTML } from '../utils/pasteClean.js';
 import { markdownToBlocks } from '../utils/markdown.js';
@@ -38,6 +40,9 @@ import { createSlashMenu } from '../ui/slashMenu.js';
 import { initDragHandles } from '../ui/dragHandle.js';
 import { createInlineToolbar } from '../ui/inlineToolbar.js';
 import { createBlockMenu } from '../ui/blockMenu.js';
+import { createDialogs } from '../ui/dialog.js';
+import { cleanBlock } from '../utils/docHygiene.js';
+import { isSimpleInlineHTML } from '../utils/blocksToHTML.js';
 
 // Register all block types (side effects)
 import '../blocks/formula.js';
@@ -123,6 +128,7 @@ export function createEditor(container, options = {}) {
   if (opts.placeholder == null) opts.placeholder = messages.placeholder;
 
   let readOnly = !!opts.readOnly;
+  let loadGen = 0; // bumped whenever a new document is loaded
   let destroyed = false;
 
   // ── Events ─────────────────────────────────────────────────────────────────
@@ -146,6 +152,7 @@ export function createEditor(container, options = {}) {
   if (opts.dir === 'ltr' || opts.dir === 'rtl') root.setAttribute('dir', opts.dir);
   else if (opts.dir === 'auto') root.setAttribute('data-bre-dir', 'auto');
   if (readOnly) root.setAttribute('data-bre-readonly', '');
+  root.setAttribute('aria-keyshortcuts', 'Alt+Shift+M');
 
   const content = document.createElement('div');
   content.className = 'bre-blocks';
@@ -218,24 +225,51 @@ export function createEditor(container, options = {}) {
   ensurePastePipeline();
 
   // ── Change notification (debounced; sanitizes lazily first) ────────────────
-  const unsafe = new Set(); // block ids whose html field was stored raw
+  const unsafe = new Set(); // (legacy bookkeeping) block ids whose html field was stored raw
 
-  function flushUnsafe() {
-    if (unsafe.size === 0) return;
-    for (const id of unsafe) {
-      const { block, context } = state.findBlockAnywhere(id);
-      if (!block || typeof block.data.html !== 'string') continue;
-      const clean = sanitizeHTML(block.data.html);
-      if (clean === block.data.html) continue;
-      if (context === null) {
-        state.updateBlockData(id, { html: clean }, { silent: true });
-      } else {
-        const col = state.getBlock(context.columnsBlockId).data.columns[context.colIndex];
-        const next = col.map(b => (b.id === id ? { ...b, data: { ...b.data, html: clean } } : b));
-        state.updateColumnBlock(context.columnsBlockId, context.colIndex, next, { silent: true });
+  // Output guarantee: everything handed to the host (getJSON(), onChange/'change'
+  // payloads, getHTML()) has sanitized `html`. Blocks are immutable, so we remember
+  // which block OBJECTS are already clean; only new/edited/loaded ones are checked.
+  // Plain text and attribute-less b/i/u/em/strong/code… (the overwhelmingly common
+  // case) are recognised without DOMPurify, so this is cheap even for big documents.
+  const cleanBlocks = new WeakSet();
+  const cleanHTMLField = (html) => (isSimpleInlineHTML(html) ? html : sanitizeHTML(html));
+
+  function cleanBlockTree(b) {
+    if (cleanBlocks.has(b)) return b;
+    let out = b;
+    const d = b.data;
+    if (d) {
+      if (typeof d.html === 'string') {
+        const c = cleanHTMLField(d.html);
+        if (c !== d.html) out = { ...b, data: { ...d, html: c } };
+      }
+      if (b.type === 'columns' && Array.isArray(d.columns)) {
+        let changed = false;
+        const cols = d.columns.map((col) => col.map((sub) => {
+          const c = cleanBlockTree(sub);
+          if (c !== sub) changed = true;
+          return c;
+        }));
+        if (changed) out = { ...out, data: { ...out.data, columns: cols } };
       }
     }
+    cleanBlocks.add(out);
+    return out;
+  }
+
+  function flushUnsafe() {
     unsafe.clear();
+    const blocks = state.getBlocks();
+    let next = null;
+    for (let i = 0; i < blocks.length; i++) {
+      const c = cleanBlockTree(blocks[i]);
+      if (c !== blocks[i]) {
+        if (!next) next = blocks.slice();
+        next[i] = c;
+      }
+    }
+    if (next) state.replaceBlocksSilently(next);
   }
 
   const fireChange = debounce(() => {
@@ -288,6 +322,7 @@ export function createEditor(container, options = {}) {
   }
 
   function rerenderAll() {
+    clearSelection();
     renderer.renderAll(state.getBlocks());
     placeholderEl = null;
     drag.refresh();
@@ -295,17 +330,35 @@ export function createEditor(container, options = {}) {
   }
   updatePlaceholder();
 
-  // ── Prompt helper (override with options.prompt) ───────────────────────────
-  async function ask(message, def = '') {
-    if (typeof opts.prompt === 'function') return opts.prompt(message, def);
-    const v = window.prompt(message, def);
-    return v;
+  // ── Input dialog (the same inline dialog BREW uses; override with options.prompt) ──
+  const dialogs = createDialogs({ getRoot: () => root, messages, fallbackEls: () => [content, root], isDestroyed: () => destroyed });
+
+  const urlValidator = (allowEmpty) => (v) => ((allowEmpty && v.v === '') || (v.v && sanitizeURL(v.v)) ? [] : ['v']);
+
+  /**
+   * Ask for one value. Resolves to the string, or null if cancelled.
+   * `where`: { anchor, atCorner, spanWidth, savedRange, validate } — dialog placement/validation.
+   */
+  function ask(message, def = '', where = {}) {
+    if (typeof opts.prompt === 'function') return Promise.resolve(opts.prompt(message, def));
+    return new Promise((resolve) => {
+      dialogs.open({
+        label: message,
+        fields: [{ key: 'v', placeholder: message, value: def }],
+        savedRange: where.savedRange,
+        anchor: where.anchor,
+        atCorner: where.atCorner,
+        spanWidth: where.spanWidth,
+        validate: where.validate,
+        onSave: (vals) => resolve(vals.v),
+        onCancel: () => resolve(null),
+      });
+    });
   }
 
   function reportInvalidUrl() {
     emitter.emit('error', { type: 'invalid-url', error: new Error(messages.invalidUrl) });
     announce(messages.invalidUrl);
-    if (typeof opts.prompt !== 'function') window.alert(messages.invalidUrl);
   }
 
   // Track the block that triggered the slash menu
@@ -315,18 +368,61 @@ export function createEditor(container, options = {}) {
   root.addEventListener('input', handleInput);
   root.addEventListener('keydown', handleKeydown);
   root.addEventListener('paste', handlePaste);
+  root.addEventListener('mousedown', keepCaretOnControls);
   root.addEventListener('click', handleClick);
   root.addEventListener('dblclick', handleDblClick);
   root.addEventListener('drop', handleDrop);
   root.addEventListener('dragover', handleDragOver);
+  const untrackFileDrag = trackFileDrag(root, () => !readOnly);
   root.addEventListener('focusin', handleFocusIn);
   root.addEventListener('focusout', handleFocusOut);
   document.addEventListener('selectionchange', handleSelectionChange);
 
   // ── Focus / selection events ───────────────────────────────────────────────
   let hasFocus = false;
+  // Last table cell the caret was in — used to put focus back after a re-render
+  // (add/remove row or column), so the controls (shown only while editing) stay visible.
+  let tableCursor = null;
+
+  function restoreTableFocus(blockId, action) {
+    const b = state.getBlock(blockId);
+    if (!b || !b.data.rows || !b.data.rows.length) return;
+    const rows = b.data.rows;
+    let { row, col } = tableCursor && tableCursor.blockId === blockId ? tableCursor : { row: 0, col: 0 };
+    if (action === 'add-row') row = rows.length - 1;
+    if (action === 'add-col') col = rows[0].length - 1;
+    row = Math.min(row, rows.length - 1);
+    col = Math.min(col, rows[0].length - 1);
+    const el = renderer.getBlockEl(blockId);
+    const cell = el && el.querySelector(`[data-bre-table-row="${row}"][data-bre-table-col="${col}"]`);
+    if (!cell) return;
+    cell.focus();
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.selectNodeContents(cell);
+      r.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    tableCursor = { blockId, row, col };
+  }
+
   function handleFocusIn(e) {
-    if (selectedEl && e.target !== selectedEl) clearSelection();
+    const cell = e.target.closest ? e.target.closest('[data-bre-table-row]') : null;
+    if (cell) {
+      const be = closestBlock(cell);
+      if (be) {
+        tableCursor = {
+          blockId: be.getAttribute('data-bre-block-id'),
+          row: parseInt(cell.getAttribute('data-bre-table-row'), 10),
+          col: parseInt(cell.getAttribute('data-bre-table-col'), 10),
+        };
+      }
+    }
+    // Focus moving into the input dialog keeps the block selected (and its tabindex,
+    // so focus can return to it when the dialog closes).
+    if (selectedEl && e.target !== selectedEl && !(e.target.closest && e.target.closest('.bre-brew-link-dialog'))) clearSelection();
     if (hasFocus) return;
     hasFocus = true;
     emitter.emit('focus', undefined);
@@ -389,8 +485,49 @@ export function createEditor(container, options = {}) {
   }
 
   // ── Click handler ──────────────────────────────────────────────────────────
+  /**
+   * Append an empty paragraph at the very end and put the caret in it. This is how
+   * you add a line after a last block you can't type after (image, table, divider, code…).
+   */
+  function appendParagraphAtEnd() {
+    const blocks = state.getBlocks();
+    const last = blocks[blocks.length - 1];
+    const p = makeBlock('paragraph', { html: '' });
+    state.saveUndoSnapshot();
+    state.addBlock(p, last ? last.id : null);
+    renderer.insertBlock(p, last ? last.id : null);
+    updatePlaceholder();
+    focusBlock(p.id, 0);
+    notifyChange();
+  }
+
+  /** Click in the empty space below the content: caret to the end, or a fresh line if the last block can't take text. */
+  function focusEnd() {
+    const blocks = state.getBlocks();
+    const last = blocks[blocks.length - 1];
+    if (last && hasInline(last) && last.type !== 'code') focusBlockEnd(last.id);
+    else appendParagraphAtEnd();
+  }
+
+  // Table controls are shown only while the table has focus. Safari/Firefox don't
+  // focus a <button> on mousedown, so without this the cell would blur, the controls
+  // would hide, and the click would never land. Keep focus (and the caret) in the cell.
+  function keepCaretOnControls(e) {
+    if (e.target.closest && e.target.closest('[data-bre-table-action]')) e.preventDefault();
+  }
+
   async function handleClick(e) {
     if (readOnly) return;
+
+    // The empty area below the last block (editor tail, or the virtual spacer).
+    if (e.target === root || e.target === content || (e.target.classList && e.target.classList.contains('bre-virt-spacer-bottom'))) {
+      // Only below the last block — clicks in the side gutter must not move the caret.
+      const blocks = state.getBlocks();
+      const lastEl = blocks.length ? renderer.getBlockEl(blocks[blocks.length - 1].id) : null;
+      const below = typeof e.clientY !== 'number' || !lastEl || e.clientY >= lastEl.getBoundingClientRect().bottom;
+      if (below) { clearSelection(); focusEnd(); }
+      return;
+    }
 
     // Clicking anywhere outside the selected block clears the selection.
     if (selectedEl && !selectedEl.contains(e.target)) clearSelection();
@@ -407,7 +544,7 @@ export function createEditor(container, options = {}) {
       const blockEl = closestBlock(formulaEl);
       const block = blockEl && state.findBlockAnywhere(blockEl.getAttribute('data-bre-block-id')).block;
       if (!block || block.type !== 'formula') return;
-      const latex = await ask(messages.promptEditFormula, block.data.latex || '');
+      const latex = await ask(messages.promptEditFormula, block.data.latex || '', { anchor: renderer.getBlockEl(block.id), spanWidth: true });
       if (latex === null || latex === undefined) return;
       state.saveUndoSnapshot();
       replaceAnywhere(block.id, { ...block, data: { latex, displayMode: block.data.displayMode ?? true } });
@@ -535,14 +672,16 @@ export function createEditor(container, options = {}) {
   async function setMediaSource(block) {
     // Image + upload hook → file picker.
     if (block.type === 'image' && typeof opts.uploadImage === 'function') {
-      const files = await pickFiles('image/*');
+      const files = await pickImageFiles(root);
       if (files.length) await uploadImages(files, block.id, true);
       return;
     }
     const msg = block.type === 'image' ? messages.promptImageUrl
       : block.type === 'audio' ? messages.promptAudioUrl
       : messages.promptVideoUrl;
-    const url = await ask(msg, block.data.src || '');
+    const url = await ask(msg, block.data.src || '', {
+      anchor: renderer.getBlockEl(block.id), atCorner: true, spanWidth: true, validate: urlValidator(true),
+    });
     if (url === null || url === undefined) return;
     const safe = url ? sanitizeURL(url) : '';
     if (url && !safe) { reportInvalidUrl(); return; }
@@ -571,6 +710,7 @@ export function createEditor(container, options = {}) {
     }
     state.updateBlockData(blockId, { rows });
     renderer.updateBlock(state.getBlock(blockId));
+    restoreTableFocus(blockId, action);
     notifyChange();
   }
 
@@ -730,6 +870,9 @@ export function createEditor(container, options = {}) {
 
   // ── Keydown ────────────────────────────────────────────────────────────────
   function handleKeydown(e) {
+    // Keys typed inside the input dialog belong to the dialog (its own undo, Enter, Esc).
+    if (e.target.closest && e.target.closest('.bre-brew-link-dialog')) return;
+
     // Undo / Redo
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z' || e.key === 'y')) {
       if (readOnly) return;
@@ -762,13 +905,14 @@ export function createEditor(container, options = {}) {
         const i = state.getBlockIndex(id);
         const n = state.getBlocks()[i + (e.key === 'ArrowDown' ? 1 : -1)];
         if (n) focusOrSelect(n.id, e.key === 'ArrowUp');
+        else if (e.key === 'ArrowDown') { clearSelection(); appendParagraphAtEnd(); }
         return;
       }
       if (!e.metaKey && !e.ctrlKey && !(e.altKey && e.shiftKey)) return; // ignore stray typing
     }
 
     // Alt+Shift+M: open the block actions menu for the current block.
-    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'm') {
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && (e.code === 'KeyM' || e.key.toLowerCase() === 'm')) {
       const be = closestBlock(e.target);
       if (be) {
         e.preventDefault();
@@ -804,6 +948,27 @@ export function createEditor(container, options = {}) {
     const tableCellEl = e.target.closest('[data-bre-table-row]');
     if (tableCellEl) {
       if (e.key === 'Tab') { e.preventDefault(); handleTableTab(tableCellEl, e.shiftKey); return; }
+      // Arrow out of the table: ↓ from the last row / ↑ from the first row.
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.shiftKey && !e.altKey) {
+        const be = closestBlock(tableCellEl);
+        const tb = be && state.getBlock(be.getAttribute('data-bre-block-id'));
+        const row = parseInt(tableCellEl.getAttribute('data-bre-table-row'), 10);
+        if (tb && tb.type === 'table') {
+          const idx = state.getBlockIndex(tb.id);
+          const blocks = state.getBlocks();
+          if (e.key === 'ArrowDown' && row === tb.data.rows.length - 1 && caretAtEdge(tableCellEl, 'end')) {
+            e.preventDefault();
+            const n = blocks[idx + 1];
+            if (n) focusOrSelect(n.id); else appendParagraphAtEnd();
+            return;
+          }
+          if (e.key === 'ArrowUp' && row === 0 && idx > 0 && caretAtEdge(tableCellEl, 'start')) {
+            e.preventDefault();
+            focusOrSelect(blocks[idx - 1].id, true);
+            return;
+          }
+        }
+      }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); }
       // Cells store plain text: block native bold/italic/underline so DOM and model stay in sync.
       if ((e.ctrlKey || e.metaKey) && !e.altKey && ['b', 'i', 'u'].includes(e.key.toLowerCase())) e.preventDefault();
@@ -1126,7 +1291,7 @@ export function createEditor(container, options = {}) {
     // Prompting steals the selection: remember it.
     const sel = window.getSelection();
     const saved = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
-    const url = await ask(messages.promptUrl);
+    const url = await ask(messages.promptUrl, '', { savedRange: saved, validate: urlValidator(false) });
     if (!url) return;
     const safe = sanitizeURL(url);
     if (!safe) { reportInvalidUrl(); return; }
@@ -1199,12 +1364,12 @@ export function createEditor(container, options = {}) {
     const cd = e.clipboardData;
 
     // Image files from the clipboard → upload hook.
-    if (typeof opts.uploadImage === 'function' && cd.files && cd.files.length) {
-      const imgs = Array.from(cd.files).filter(f => f.type.startsWith('image/'));
-      if (imgs.length) {
-        uploadImages(imgs, info.blockId, true);
-        return;
-      }
+    // Text wins over a picture on the clipboard (Excel/Word); a bare image is uploaded,
+    // or reported when no hook is set.
+    const pastedImgs = pastedImages(cd);
+    if (pastedImgs.length) {
+      uploadImages(pastedImgs, info.blockId, true);
+      return;
     }
 
     const html = cd.getData('text/html');
@@ -1261,13 +1426,16 @@ export function createEditor(container, options = {}) {
     const dt = e.dataTransfer;
     if (!dt) return;
 
-    const files = Array.from(dt.files || []).filter(f => f.type.startsWith('image/'));
+    const files = imageFiles(dt.files);
     if (files.length) {
       e.preventDefault();
-      if (typeof opts.uploadImage === 'function') {
-        const blockEl = e.target.closest ? closestBlock(e.target) : null;
-        uploadImages(files, blockEl ? blockEl.getAttribute('data-bre-block-id') : null, false);
+      const blockEl = e.target.closest ? closestBlock(e.target) : null;
+      let position = 'after';
+      if (blockEl && blockEl.getBoundingClientRect) {
+        const r = blockEl.getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) position = 'before';
       }
+      uploadImages(files, blockEl ? blockEl.getAttribute('data-bre-block-id') : null, false, position);
       return;
     }
     // Any other file: never let the browser navigate away from the page.
@@ -1303,63 +1471,71 @@ export function createEditor(container, options = {}) {
   }
 
   // ── Image upload ───────────────────────────────────────────────────────────
-  function pickFiles(accept) {
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = accept;
-      input.multiple = true;
-      input.hidden = true;
-      input.addEventListener('change', () => { resolve(Array.from(input.files || [])); input.remove(); });
-      input.addEventListener('cancel', () => { resolve([]); input.remove(); });
-      root.appendChild(input);
-      input.click();
-    });
-  }
-
   /**
-   * Upload images via options.uploadImage and insert them as image blocks.
+   * Upload ONE image (the first of `files`) via options.uploadImage and insert it
+   * as an image block. Extra files are ignored with a single error event.
    * @param {boolean} replaceTarget  replace the target block if it is an empty
    *   paragraph or an unset image block
+   * @param {'before'|'after'} position  where to insert relative to the anchor
    */
-  async function uploadImages(files, anchorId, replaceTarget) {
-    if (typeof opts.uploadImage !== 'function') return;
-    let after = anchorId;
+  async function uploadImages(files, anchorId, replaceTarget, position = 'after') {
+    if (destroyed || readOnly) return;
+    const { first, extra } = splitFirst(files);
+    if (!first) return;
+    const gen = loadGen; // a document loaded meanwhile must not receive this image
+    if (extra.length) emitter.emit('error', { type: 'upload', error: new Error(messages.uploadOneAtATime), file: extra[0] });
     let replaceId = null;
     if (replaceTarget && anchorId) {
       const b = state.findBlockAnywhere(anchorId).block;
       const emptyPara = b && b.type === 'paragraph' && !(b.data.html || b.data.text || '').replace(/<[^>]*>/g, '').trim();
       if (emptyPara || (b && b.type === 'image' && !b.data.src)) replaceId = anchorId;
     }
-    for (const file of files) {
-      announce(messages.uploading);
-      try {
-        const url = await opts.uploadImage(file);
-        if (destroyed) return;
-        const safe = sanitizeURL(url);
-        if (!safe) throw new Error(messages.invalidUrl);
-        state.saveUndoSnapshot();
-        const data = { src: safe, alt: file.name ? file.name.replace(/\.[^.]+$/, '') : '', caption: '' };
-        const existing = replaceId ? state.findBlockAnywhere(replaceId).block : null;
-        if (existing) {
-          // Reuse the id so the block is replaced in place (top-level or column).
-          const nb = { id: replaceId, type: 'image', data };
-          replaceAnywhere(replaceId, nb);
-          after = replaceId;
-          replaceId = null;
-        } else {
-          const nb = makeBlock('image', data);
-          const anchorOk = after && state.getBlock(after);
-          state.addBlock(nb, anchorOk ? after : null);
-          renderer.insertBlock(nb, anchorOk ? after : null);
-          after = nb.id;
+    if (typeof opts.uploadImage === 'function') announce(messages.uploading);
+    try {
+      const safe = await uploadOne(first, { hook: opts.uploadImage, maxSize: opts.uploadMaxSize, messages });
+      if (destroyed || readOnly || gen !== loadGen) return;
+      state.saveUndoSnapshot();
+      const data = { src: safe, alt: first.name ? first.name.replace(/\.[^.]+$/, '') : '', caption: '' };
+      const existing = replaceId ? state.findBlockAnywhere(replaceId).block : null;
+      if (existing) {
+        // Reuse the id so the block is replaced in place (top-level or column).
+        replaceAnywhere(replaceId, { id: replaceId, type: 'image', data });
+      } else {
+        const nb = makeBlock('image', data);
+        const found = anchorId ? state.findBlockAnywhere(anchorId) : null;
+        if (found && found.context) { // anchor lives inside a columns block: insert into that column
+          const { columnsBlockId, colIndex, indexInCol } = found.context;
+          const col = state.getBlock(columnsBlockId).data.columns[colIndex].slice();
+          col.splice(position === 'before' ? indexInCol : indexInCol + 1, 0, nb);
+          state.updateColumnBlock(columnsBlockId, colIndex, col);
+          renderer.updateBlock(state.getBlock(columnsBlockId));
+          updatePlaceholder();
+          notifyChange();
+          return;
         }
-        updatePlaceholder();
-        notifyChange();
-      } catch (error) {
-        emitter.emit('error', { type: 'upload', error, file });
-        announce(messages.uploadFailed);
+        const anchorOk = anchorId && state.getBlock(anchorId);
+        const blocks = state.getBlocks();
+        const idx = anchorOk ? blocks.findIndex(b => b.id === anchorId) : -1;
+        if (anchorOk && position === 'before' && idx > 0) {
+          const prevId = blocks[idx - 1].id;
+          state.addBlock(nb, prevId);
+          renderer.insertBlock(nb, prevId);
+        } else {
+          state.addBlock(nb, anchorOk ? anchorId : null);
+          renderer.insertBlock(nb, anchorOk ? anchorId : null);
+          if (anchorOk && position === 'before') { // anchor is the first block
+            state.moveBlock(1, 0);
+            const anchorEl = renderer.getBlockEl(anchorId), newEl = renderer.getBlockEl(nb.id);
+            if (anchorEl && newEl && anchorEl.parentNode) anchorEl.parentNode.insertBefore(newEl, anchorEl);
+          }
+        }
       }
+      updatePlaceholder();
+      notifyChange();
+    } catch (error) {
+      if (destroyed) return;
+      emitter.emit('error', { type: 'upload', error, file: first });
+      announce(messages.uploadFailed);
     }
   }
 
@@ -1378,18 +1554,18 @@ export function createEditor(container, options = {}) {
         columns: Array.from({ length: item.colCount || 2 }, () => [makeBlock('paragraph', { html: '' })]),
       };
     } else if (item.type === 'formula') {
-      const latex = await ask(messages.promptFormula);
+      const latex = await ask(messages.promptFormula, '', { anchor: renderer.getBlockEl(targetId), spanWidth: true });
       if (!latex) { clearSlashText(targetId); return; }
       newData = { latex, displayMode: true };
     } else if (item.type === 'image' && typeof opts.uploadImage === 'function') {
       clearSlashText(targetId);
-      const files = await pickFiles('image/*');
+      const files = await pickImageFiles(root);
       if (files.length) await uploadImages(files, targetId, true);
       return;
     } else if (MEDIA_TYPES.has(item.type)) {
       const label = item.type === 'image' ? messages.promptImageUrl
         : item.type === 'audio' ? messages.promptAudioUrl : messages.promptVideoUrl;
-      const url = await ask(label);
+      const url = await ask(label, '', { anchor: renderer.getBlockEl(targetId), spanWidth: true, validate: urlValidator(false) });
       if (!url) { clearSlashText(targetId); return; }
       const safe = sanitizeURL(url);
       if (!safe) { reportInvalidUrl(); clearSlashText(targetId); return; }
@@ -1469,7 +1645,7 @@ export function createEditor(container, options = {}) {
       // Keep keyboard focus inside the editor so repeated Cmd+Z keeps working.
       const i = firstDifference(oldBlocks, newBlocks);
       const target = newBlocks[Math.min(i, newBlocks.length - 1)];
-      if (target) focusBlockEnd(target.id);
+      if (target) focusOrSelect(target.id, true);
     }
     updatePlaceholder();
   }
@@ -1482,6 +1658,7 @@ export function createEditor(container, options = {}) {
 
   /** Re-render after a structural edit, keeping the scroll window in virtual mode. */
   function refreshAll() {
+    clearSelection(); // the selected element is about to be replaced
     renderer.refresh(state.getBlocks());
     placeholderEl = null;
     drag.refresh();
@@ -1508,9 +1685,8 @@ export function createEditor(container, options = {}) {
         continue;
       }
       let nb = b;
-      if (typeof nb.id !== 'string' || !nb.data || typeof nb.data !== 'object') {
-        nb = { ...nb, id: typeof nb.id === 'string' ? nb.id : generateId(), data: nb.data && typeof nb.data === 'object' ? nb.data : {} };
-      }
+      if (!nb.data || typeof nb.data !== 'object') nb = { ...nb, data: {} };
+      nb = cleanBlock(nb); // safe id charset; media src must pass the URL policy
       if (nb.type === 'columns') {
         const raw = Array.isArray(nb.data.columns) ? nb.data.columns : Array.isArray(nb.data.children) ? nb.data.children : [[], []];
         let cols = raw.map((c) => { const o = []; normalizeBlocks(Array.isArray(c) ? c : [], o); if (!o.length) o.push(makeBlock('paragraph', { html: '' })); return o; });
@@ -1543,8 +1719,15 @@ export function createEditor(container, options = {}) {
     return state.getDoc();
   }
 
-  /** Programmatic loads never fire 'change'. */
+  /**
+   * Programmatic loads never fire 'change'.
+   *
+   * TODO(setJSON-validation): this is permissive — bad input (unknown block types, unsafe ids/src,
+   * wrong data shapes) is silently repaired and the caller is not told. Decide whether to reject it
+   * or report what changed (strict mode / validateDocument / 'error' event). Notes in TODO.md.
+   */
   function setJSON(doc) {
+    loadGen++;
     if (!doc || !Array.isArray(doc.blocks)) {
       console.warn('[bre] setJSON: invalid document');
       return;
@@ -1606,6 +1789,7 @@ export function createEditor(container, options = {}) {
   }
 
   function setHTML(html) {
+    loadGen++;
     if (typeof html !== 'string') return;
     const blocks = htmlToBlocks(html);
     const now = Date.now();
@@ -1650,13 +1834,16 @@ export function createEditor(container, options = {}) {
     root.removeEventListener('input', handleInput);
     root.removeEventListener('keydown', handleKeydown);
     root.removeEventListener('paste', handlePaste);
+    root.removeEventListener('mousedown', keepCaretOnControls);
     root.removeEventListener('click', handleClick);
     root.removeEventListener('dblclick', handleDblClick);
     root.removeEventListener('drop', handleDrop);
     root.removeEventListener('dragover', handleDragOver);
+    untrackFileDrag();
     root.removeEventListener('focusin', handleFocusIn);
     root.removeEventListener('focusout', handleFocusOut);
     document.removeEventListener('selectionchange', handleSelectionChange);
+    dialogs.closeActive(false);
     slashMenu.destroy();
     blockMenu.destroy();
     inlineToolbar.destroy();

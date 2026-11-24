@@ -180,3 +180,45 @@ test('security: style attributes are allowlisted (KaTeX only), denylist bypasses
   assert.doesNotMatch(sanitizeHTML('<span style="height:1em">x</span>', { allowMedia: true }), /style/);
   assert.match(sanitizeHTML('<span style="height:0.69em;vertical-align:-0.08em">x</span>', { allowKaTeX: true }), /height:0.69em;vertical-align:-0.08em/);
 });
+
+test('htmlToBlocks: <td>-only table is headerless; <th> row keeps default header', () => {
+  const [a] = htmlToBlocks('<table><tbody><tr><td>x</td><td>y</td></tr><tr><td>1</td><td>2</td></tr></tbody></table>');
+  assert.equal(a.data.hasHeader, false);
+  assert.deepEqual(a.data.rows, [['x', 'y'], ['1', '2']]);
+  const [b] = htmlToBlocks('<table><thead><tr><th>x</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>');
+  assert.equal('hasHeader' in b.data, false);
+});
+
+import { inlineHTMLToMarkdown, domInlineToMd } from '../src/utils/blocksToMarkdown.js';
+
+test('inline link fast path is byte-identical to the DOM path', () => {
+  const corpus = [
+    'see <a href="https://example.com/a">link</a> now',
+    '<a href="https://example.com/a(b)c">parens</a>',
+    '<a href="https://example.com/a_b*c[1]">specials</a> and *star* _under_',
+    '<strong><a href="http://e.com">bold link</a></strong>',
+    '<a href="https://e.com"><strong>b</strong> and <em>i</em></a>',
+    '<em>x <a href="https://e.com/p?q=1&amp;r=2">amp</a></em>',
+    '<a href="mailto:a@b.co">mail</a>',
+    '<A HREF="https://e.com">upper</A>',
+    '<a href="https://e.com"></a>empty',
+    '<a href="https://e.com"> </a>blank',
+    '<a href="https://e.com"> spaced </a>',
+    '<a href="https://a.com">one</a> <a href="https://b.com">two</a>',
+    '<a href="https://a.com">outer <a href="https://b.com">nested</a></a>',
+    '<a href="javascript:alert(1)">js</a>',
+    '<a href="https://e.com" onclick="x()">attr</a>',
+    '<a href="https://e.com" target="_blank">target</a>',
+    '<a href="/relative">rel</a>',
+    '<a href="https://e.com/a b">space</a>',
+    '<a href="https://e.com/&quot;">ent</a>',
+    '<a>no href</a>',
+    '<a href="https://e.com">unclosed',
+    '<code><a href="https://e.com">c</a></code>',
+    'plain <b>bold</b> <i>it</i> <u>u</u> <s>s</s>',
+    'a<br>b <a href="https://e.com">l</a>',
+  ];
+  for (const html of corpus) {
+    assert.equal(inlineHTMLToMarkdown(html), domInlineToMd(html), html);
+  }
+});

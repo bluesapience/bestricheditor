@@ -143,3 +143,19 @@ export function isCursorAtEnd(el) {
   const offset = getCursorOffset(el);
   return offset === el.textContent.length;
 }
+
+/**
+ * True when the caret sits at the very start / end of `el`'s content (no text
+ * before/after it). With no selection inside `el` it returns true — callers use
+ * this to decide whether an arrow key should leave the element.
+ */
+export function caretAtEdge(el, edge) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) return true;
+  const r = sel.getRangeAt(0);
+  const probe = document.createRange();
+  probe.selectNodeContents(el);
+  if (edge === 'end') probe.setStart(r.endContainer, r.endOffset);
+  else probe.setEnd(r.startContainer, r.startOffset);
+  return probe.toString().length === 0;
+}

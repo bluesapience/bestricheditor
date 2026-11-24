@@ -47,37 +47,29 @@ body {
 
 .demo-card {
   background: #fff;
-  border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
   min-height: 500px;
   overflow: hidden;
 }
 
-/* ── The demo page is the HOST: it styles the editor, the library does not. ──
-   Everything below is ordinary page CSS targeting the editor's .bre-* classes. */
+/* ── The demo page is the HOST ──────────────────────────────────────────────
+   The editor's own UI (menus, popups, dialogs, buttons, selection, spacing) comes
+   from the library's bre.css and can be changed with --bre-* variables, e.g.:
+
+     :root { --bre-accent: #2563eb; --bre-radius: 6px; }
+
+   What stays here is what a real site always owns: its typography and how its
+   CONTENT looks (quotes, code blocks, headings). */
 
 #bre-demo {
-  padding: 20px 32px 32px 44px; /* left gutter leaves room for the drag handle */
+  padding: 20px 32px 32px;
   font-size: 16px;
   line-height: 1.6;
 }
 
 #bre-demo .bre-heading { line-height: 1.3; }
 #bre-demo .bre-quote { margin: 0; padding: 4px 16px; border-left: 3px solid #3b82f6; color: #4b5563; }
-#bre-demo .bre-code-wrapper { background: #1e1e2e; color: #cdd6f4; border-radius: 6px; padding: 8px 12px; }
+#bre-demo .bre-code-wrapper { background: #1e1e2e; color: #cdd6f4; padding: 8px 12px; }
 #bre-demo .bre-code { margin: 0; overflow-x: auto; }
-#bre-demo .bre-column { padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 6px; margin: 0 4px; }
-#bre-demo .bre-table th, #bre-demo .bre-table td { border-color: #e5e7eb; padding: 6px 10px; }
-#bre-demo .bre-slash-menu, #bre-demo .bre-inline-toolbar { border-color: #e5e7eb; }
-.bre-slash-menu { border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 240px; }
-.bre-slash-item { padding: 6px 10px; }
-.bre-slash-item__icon { font-family: monospace; min-width: 2.5em; text-align: center; }
-.bre-slash-item__desc { opacity: .6; font-size: .85em; }
-.bre-inline-toolbar { border-radius: 6px; padding: 2px; }
-.bre-inline-toolbar-btn { border: 0; background: none; width: 28px; height: 28px; }
-.bre-drag-handle { opacity: .4; padding-right: 6px; }
-.bre-brew-toolbar { gap: 4px; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
-.bre-brew-btn, .bre-brew-block-type { border: 1px solid transparent; background: none; padding: 4px 8px; }
-.bre-brew-surface { min-height: 400px; outline: none; }
-.bre-brem-textarea { min-height: 300px; outline: none; font-family: monospace; }
-.bre-brem-toggle { margin: 8px; padding: 2px 10px; }
+#bre-demo .bre-brew-surface,
+#bre-demo .bre-brem-textarea { outline: none; }

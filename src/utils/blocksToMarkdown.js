@@ -11,6 +11,9 @@
  *  - columns are flattened in reading order (lossy, warns once).
  *  - nested `children` on non-column blocks are flattened (lossy, warns once).
  *  - table cells are plain text (BRE tables store strings).
+ *  - headerless tables (`hasHeader: false`) get a blank header row `|  |  |`;
+ *    the BREM parser reads an all-blank header row as "no header". Side effect:
+ *    a headed table whose header cells are all blank reads back as headerless.
  */
 import { sanitizeHTML } from './sanitize.js';
 
@@ -40,7 +43,7 @@ function wrap(open, inner, close) {
   return m[1] + open + m[2] + close + m[3];
 }
 
-function encodeUrl(url) {
+export function encodeUrl(url) {
   return String(url).replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29');
 }
 
@@ -109,18 +112,19 @@ function nodeToMd(node, inStrong) {
 
 // ── DOM-free fast path ─────────────────────────────────────────────────────
 // Handles the overwhelmingly common shape: attribute-free <strong>/<b>/<em>/
-// <i>/<u>/<s>/<del>/<code> around plain text, no entities. Builds a tiny tree
+// <i>/<u>/<s>/<del>/<code> around plain text, no entities, plus <a href> whose
+// only attribute is a plain http(s)/mailto URL (no spaces, quotes or entities). Builds a tiny tree
 // of node-like objects and reuses nodeToMd, so output is identical to the DOM
 // path. Anything else (links, attributes, entities, unbalanced tags) returns
 // null and takes the sanitizing DOMParser path.
-const SIMPLE_TOKEN = /<(\/?)(strong|b|em|i|u|s|del|strike|code)>|([^<&]+)/gi;
+const SIMPLE_TOKEN = /<(\/?)(strong|b|em|i|u|s|del|strike|code|a)>|<a href="((?:https?:\/\/|mailto:)[^\s"'<>&`]*)">|([^<&]+)/gi;
 
-function fakeEl(name) {
+function fakeEl(name, attrs) {
   const el = {
     nodeType: 1,
     nodeName: name.toUpperCase(),
     childNodes: [],
-    getAttribute: () => null,
+    getAttribute: (n) => (attrs && n in attrs ? attrs[n] : null),
     classList: null,
   };
   Object.defineProperty(el, 'textContent', {
@@ -139,12 +143,19 @@ function simpleInlineToMd(html) {
     if (m.index !== pos) return null; // gap = something we don't handle
     pos = SIMPLE_TOKEN.lastIndex;
     const cur = stack[stack.length - 1];
-    if (m[3] !== undefined) {
-      cur.childNodes.push({ nodeType: 3, nodeValue: m[3] });
+    if (m[4] !== undefined) {
+      cur.childNodes.push({ nodeType: 3, nodeValue: m[4] });
+    } else if (m[3] !== undefined) {
+      // HTML parsing splits nested anchors; leave that to the DOM path.
+      if (stack.some(e => e.nodeName === 'A')) return null;
+      const el = fakeEl('a', { href: m[3] });
+      cur.childNodes.push(el);
+      stack.push(el);
     } else if (m[1]) {
       if (stack.length < 2 || stack[stack.length - 1].nodeName !== m[2].toUpperCase()) return null;
       stack.pop();
     } else {
+      if (m[2].toLowerCase() === 'a') return null; // bare <a> (no href): DOM path
       const el = fakeEl(m[2]);
       cur.childNodes.push(el);
       stack.push(el);
@@ -166,6 +177,11 @@ export function inlineHTMLToMarkdown(html) {
   if (!/[<&]/.test(html)) return escText(html.replace(/ /g, ' ').replace(/[\r\n]+/g, ' '));
   const fast = simpleInlineToMd(html);
   if (fast !== null) return fast;
+  return domInlineToMd(html);
+}
+
+/** Reference implementation: sanitize + DOMParser. Exported for equivalence tests. */
+export function domInlineToMd(html) {
   const clean = sanitizeHTML(html);
   if (!_parser) _parser = new DOMParser();
   const body = _parser.parseFromString(`<body>${clean}`, 'text/html').body;
@@ -244,7 +260,8 @@ function emit(blocks, items, counter) {
           while (cells.length < width) cells.push('');
           return `| ${cells.join(' | ')} |`;
         };
-        const [head, ...body] = rows;
+        const headerless = d.hasHeader === false;
+        const [head, ...body] = headerless ? [new Array(width).fill(''), ...rows] : rows;
         const sep = `| ${Array(width).fill('---').join(' | ')} |`;
         items.push({ md: [line(head), sep, ...body.map(line)].join('\n'), kind: 'block' });
         break;

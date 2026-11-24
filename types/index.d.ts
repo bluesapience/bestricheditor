@@ -26,8 +26,10 @@ export interface FormulaData {
   displayMode: boolean;
 }
 export interface TableData {
-  /** First row is the header. */
+  /** First row is the header unless `hasHeader` is false. */
   rows: string[][];
+  /** Render the first row as a header. Omitted means true. */
+  hasHeader?: boolean;
 }
 export interface ImageData {
   src: string;
@@ -163,14 +165,19 @@ export interface EditorOptionsBase {
   /** Block count above which 'auto' virtualization turns on. Default 300. */
   virtualizeThreshold?: number;
   /**
-   * Replace window.prompt for URL / formula input. Return the string (or null to
-   * cancel); may be async. BRE mode only.
+   * Replace the built-in inline input dialog (URL / formula entry). Return the
+   * string (or null to cancel); may be async. BRE mode only.
    */
   prompt?: (message: string, defaultValue: string) => string | null | Promise<string | null>;
   readOnly?: boolean;
   placeholder?: string;
-  /** Upload hook for pasted/dropped/picked images; resolve with the final URL. */
+  /**
+   * Enables image upload (BRE, BREW and BREM): called for dropped, pasted and picked images, one image per
+   * action. Resolve with the final http(s) URL; reject to report a failure via `onError`.
+   */
   uploadImage?: (file: File) => Promise<string>;
+  /** Largest allowed image, in bytes. Larger files are rejected before `uploadImage` runs. */
+  uploadMaxSize?: number;
   /** Opt-in URL of a KaTeX stylesheet to inject. Nothing is injected by default. */
   katexCssUrl?: string;
   messages?: Messages;

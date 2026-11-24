@@ -4,9 +4,8 @@
  * The input is sanitized ONCE by DOMPurify into a DOM fragment; every block's
  * inline html is then read from already-clean nodes (no per-block re-sanitize).
  */
-import DOMPurify from 'dompurify';
 import { generateId } from './id.js';
-import { sanitizeURL, FORBIDDEN_TAGS } from './sanitize.js';
+import { sanitizeURL, sanitizeToFragment } from './sanitize.js';
 import { blockRegistry } from '../core/blockRegistry.js';
 
 const BLOCK_SELECTOR =
@@ -31,12 +30,8 @@ function makeBlock(type, data) {
 export function htmlToBlocks(html) {
   if (typeof html !== 'string' || !html.trim()) return [];
 
-  const frag = DOMPurify.sanitize(html, {
-    USE_PROFILES: { html: true },
-    FORBID_ATTR: ['style'],
-    FORBID_TAGS: FORBIDDEN_TAGS,
-    RETURN_DOM_FRAGMENT: true,
-  });
+  // Same policy as everywhere else (no style/id/name/data: URIs/form controls).
+  const frag = sanitizeToFragment(html);
 
   const blocks = [];
   walkChildren(frag, blocks);
@@ -213,19 +208,26 @@ function processBlockNode(node, tag, blocks) {
 
     case 'TABLE': {
       const rows = [];
+      let firstRowHasTh = false;
       for (const tr of node.querySelectorAll('tr')) {
         const row = [];
+        let hasTh = false;
         for (const cell of tr.children) {
           const t = cell.tagName.toUpperCase();
+          if (t === 'TH') hasTh = true;
           if (t === 'TH' || t === 'TD') row.push(cell.textContent.trim());
         }
-        if (row.length > 0) rows.push(row);
+        if (row.length > 0) {
+          if (rows.length === 0) firstRowHasTh = hasTh;
+          rows.push(row);
+        }
       }
       if (rows.length > 0) {
         // Normalise ragged rows so the table block is rectangular.
         const width = Math.max(...rows.map(r => r.length));
         for (const r of rows) while (r.length < width) r.push('');
-        blocks.push(makeBlock('table', { rows }));
+        // A table whose first row has no <th> is headerless; omit the flag otherwise (default true).
+        blocks.push(makeBlock('table', firstRowHasTh ? { rows } : { rows, hasHeader: false }));
       }
       break;
     }
