@@ -402,18 +402,19 @@ export function createBrewEditor(container, options = {}) {
       }
       case 'table': {
         const rows = Array.isArray(d.rows) && d.rows.length ? d.rows : [['', ''], ['', '']];
-        const [headerRow, ...bodyRows] = rows;
+        const hasHeader = d.hasHeader !== false;
+        const [headerRow, ...bodyRows] = hasHeader ? rows : [null, ...rows];
         const makeCell = (tag, content, rowIdx, colIdx) => {
-          const ph = rowIdx === 0 ? messages.tableHeader : messages.tableCell;
+          const ph = tag === 'th' ? messages.tableHeader : messages.tableCell;
           return `<${tag} class="bre-table-cell" contenteditable="${readOnly ? 'false' : 'true'}" data-bre-table-row="${rowIdx}" data-bre-table-col="${colIdx}" data-bre-placeholder="${escapeHTML(ph)}">${escapeHTML(String(content ?? ''))}</${tag}>`;
         };
         const th = headerRow ? `<thead><tr>${headerRow.map((c, ci) => makeCell('th', c, 0, ci)).join('')}</tr></thead>` : '';
         const tb = bodyRows.length
-          ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1, ci)).join('')}</tr>`).join('')}</tbody>`
+          ? `<tbody>${bodyRows.map((r, ri) => `<tr>${(Array.isArray(r) ? r : []).map((c, ci) => makeCell('td', c, ri + 1 + (hasHeader ? 0 : -1), ci)).join('')}</tr>`).join('')}</tbody>`
           : '';
         const btn = (a, label) => `<button type="button" class="bre-table-btn" data-bre-table-action="${a}">${escapeHTML(label)}</button>`;
         const controls = `<div class="bre-table-controls"${readOnly ? ' hidden' : ''}>${btn('add-row', messages.addRow)}${btn('del-row', messages.delRow)}${btn('add-col', messages.addCol)}${btn('del-col', messages.delCol)}${btn('del-block', messages.delTable)}</div>`;
-        return `<div data-bre-type="table" data-bre-id="${id}" data-bre-block-id="${id}" contenteditable="false" class="bre-table-wrapper"><table class="bre-table">${th}${tb}</table>${controls}</div>`;
+        return `<div data-bre-type="table" data-bre-id="${id}" data-bre-block-id="${id}" contenteditable="false" class="bre-table-wrapper"${hasHeader ? '' : ' data-bre-header="false"'}><table class="bre-table">${th}${tb}</table>${controls}</div>`;
       }
       case 'image': {
         const src = d.src || '';
@@ -645,7 +646,9 @@ export function createBrewEditor(container, options = {}) {
               if (row.length) rows.push(row);
             }
           }
-          return { id, type: 'table', data: { rows } };
+          const data = { rows };
+          if (node.getAttribute('data-bre-header') === 'false') data.hasHeader = false;
+          return { id, type: 'table', data };
         }
         // Chrome wraps new lines in divs — treat as paragraph
         return { id, type: 'paragraph', data: { html: inlineHTMLOf(node) } };
@@ -1058,10 +1061,13 @@ export function createBrewEditor(container, options = {}) {
       const tbody = table.querySelector('tbody');
       if (!tbody) return;
       const rows = tbody.querySelectorAll('tr');
-      if (rows.length > 0) rows[rows.length - 1].remove();
+      // A headerless table must keep at least one row.
+      const keep = table.querySelector('thead') ? 0 : 1;
+      if (rows.length > keep) rows[rows.length - 1].remove();
     } else if (action === 'add-col') {
       table.querySelectorAll('tr').forEach((tr, ri) => {
-        tr.appendChild(makeCell(ri === 0 ? 'th' : 'td', ri === 0 ? messages.tableHeader : messages.tableCell));
+        const head = tr.parentNode && tr.parentNode.nodeName === 'THEAD';
+        tr.appendChild(makeCell(head ? 'th' : 'td', head ? messages.tableHeader : messages.tableCell));
       });
       reindexTable(table);
     } else if (action === 'del-col') {

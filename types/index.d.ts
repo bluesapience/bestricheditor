@@ -26,8 +26,10 @@ export interface FormulaData {
   displayMode: boolean;
 }
 export interface TableData {
-  /** First row is the header. */
+  /** First row is the header unless `hasHeader` is false. */
   rows: string[][];
+  /** Render the first row as a header. Omitted means true. */
+  hasHeader?: boolean;
 }
 export interface ImageData {
   src: string;

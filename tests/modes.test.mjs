@@ -559,3 +559,148 @@ test('BREW: table/media control buttons keep focus on mousedown (controls would 
   assert.ok(ev(host.querySelector('[data-bre-media-action="edit"]'), 'mousedown').defaultPrevented);
   ed.destroy();
 });
+
+// ── Headerless tables (hasHeader) ───────────────────────────────────────────
+const headerless = () => doc([{ id: 'h', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']], hasHeader: false } }]);
+const headed = (extra = {}) => doc([{ id: 'h', type: 'table', data: { rows: [['a', 'b'], ['c', 'd']], ...extra } }]);
+
+for (const mode of ['BRE', 'BREW']) {
+  test(`${mode}: headerless table renders only <td> and round-trips hasHeader:false`, async () => {
+    const host = mount();
+    const ed = createEditor(host, { mode });
+    ed.setJSON(headerless());
+    assert.equal(host.querySelectorAll('table th, table thead').length, 0);
+    assert.equal(host.querySelectorAll('table td').length, 4);
+    const t = ed.getJSON().blocks.find((b) => b.type === 'table');
+    assert.equal(t.data.hasHeader, false);
+    assert.deepEqual(t.data.rows, [['a', 'b'], ['c', 'd']]);
+    assert.doesNotMatch(ed.getHTML(), /<th|<thead/);
+    ed.destroy();
+  });
+
+  test(`${mode}: legacy / explicit-header tables still render a header`, () => {
+    for (const data of [{}, { hasHeader: true }]) {
+      const host = mount();
+      const ed = createEditor(host, { mode });
+      ed.setJSON(headed(data));
+      assert.equal(host.querySelectorAll('table thead th').length, 2);
+      assert.equal(host.querySelectorAll('table tbody td').length, 2);
+      assert.notEqual(ed.getJSON().blocks.find((b) => b.type === 'table').data.hasHeader, false);
+      assert.match(ed.getHTML(), /<th>a<\/th>/);
+      ed.destroy();
+    }
+  });
+
+  test(`${mode}: row/column controls work on a headerless table`, async () => {
+    const host = mount();
+    const ed = createEditor(host, { mode });
+    ed.setJSON(headerless());
+    const click = (a) => { host.querySelector(`[data-bre-table-action="${a}"]`).click(); };
+    click('add-row'); await tick(5);
+    click('add-col'); await tick(5);
+    let t = ed.getJSON().blocks.find((b) => b.type === 'table');
+    assert.equal(t.data.rows.length, 3);
+    assert.equal(t.data.rows[0].length, 3);
+    assert.equal(t.data.hasHeader, false);
+    assert.equal(host.querySelectorAll('table th').length, 0);
+    for (let i = 0; i < 4; i++) { click('del-row'); await tick(5); }
+    t = ed.getJSON().blocks.find((b) => b.type === 'table');
+    assert.ok(t.data.rows.length >= 1, 'never deletes the last row');
+    ed.destroy();
+  });
+}
+
+test('BRE→BREW: hasHeader:false survives a cross-mode load', () => {
+  const a = createEditor(mount(), { mode: 'BRE' });
+  a.setJSON(headerless());
+  const b = createEditor(mount(), { mode: 'BREW' });
+  b.setJSON(a.getJSON());
+  assert.equal(b.getJSON().blocks.find((x) => x.type === 'table').data.hasHeader, false);
+  a.destroy(); b.destroy();
+});
+
+// ── BREM render cache (preview + getHTML share one sanitize) ────────────────
+import { parseMarkdown } from '../src/utils/markdown.js';
+import { sanitizeHTML } from '../src/utils/sanitize.js';
+
+test('BREM cache: getHTML equals a direct parse+sanitize, repeatably', () => {
+  const ed = createEditor(mount(), { mode: 'BREM' });
+  ed.setJSON(FIXTURE);
+  const md = ed.getJSON().blocks[0].data.markdown;
+  const direct = sanitizeHTML(parseMarkdown(md, {}), { allowKaTeX: true, allowMedia: true });
+  assert.equal(ed.getHTML(), direct);
+  assert.equal(ed.getHTML(), direct, 'second call (cache hit) is identical');
+  ed.destroy();
+});
+
+test('BREM cache: preview stays intact after getHTML, and edits invalidate both', () => {
+  const host = mount();
+  const ed = createEditor(host, { mode: 'BREM' });
+  ed.setJSON(FIXTURE);
+  const before = host.querySelector('.bre-brem-preview').innerHTML;
+  ed.getHTML();
+  assert.equal(host.querySelector('.bre-brem-preview').innerHTML, before);
+  // user edit via the textarea
+  const ta = host.querySelector('textarea');
+  ta.value = '# Changed';
+  ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.match(ed.getHTML(), /Changed/);
+  assert.doesNotMatch(ed.getHTML(), /Hello/);
+  // programmatic reload
+  ed.setJSON(FIXTURE);
+  assert.match(ed.getHTML(), /Hello/);
+  assert.match(host.querySelector('.bre-brem-preview').innerHTML, /Hello/);
+  ed.destroy();
+});
+
+test('BREM cache: empty document and hostile markdown stay safe', () => {
+  const ed = createEditor(mount(), { mode: 'BREM' });
+  assert.equal(ed.getHTML(), '');
+  ed.setJSON({ id: 'x', version: 1, created: 1, updated: 1, blocks: [{ id: 'm', type: 'markdown', data: { markdown: '<script>alert(1)</script>[x](javascript:alert(1))' } }] });
+  assert.doesNotMatch(ed.getHTML(), /<script|javascript:/i);
+  ed.destroy();
+});
+
+// ── BREM headerless tables ──────────────────────────────────────────────────
+test('BREM: headerless table → markdown → preview / blocks stays headerless', () => {
+  const ed = createEditor(mount(), { mode: 'BREM' });
+  ed.setJSON(headerless());
+  const md = ed.getJSON().blocks[0].data.markdown;
+  assert.match(md, /^\|\s*\|\s*\|\n\| --- \| --- \|\n\| a \| b \|\n\| c \| d \|/);
+  assert.doesNotMatch(ed.getHTML(), /<th|<thead/);
+  assert.equal((ed.getHTML().match(/<td>/g) || []).length, 4);
+  const t = ed.getJSON({ as: 'blocks' }).blocks.find((b) => b.type === 'table');
+  assert.equal(t.data.hasHeader, false);
+  assert.deepEqual(t.data.rows, [['a', 'b'], ['c', 'd']]);
+  ed.destroy();
+});
+
+test('BREM: headed and legacy tables keep their header', () => {
+  for (const data of [{}, { hasHeader: true }]) {
+    const ed = createEditor(mount(), { mode: 'BREM' });
+    ed.setJSON(headed(data));
+    assert.match(ed.getHTML(), /<th>a<\/th>/);
+    const t = ed.getJSON({ as: 'blocks' }).blocks.find((b) => b.type === 'table');
+    assert.notEqual(t.data.hasHeader, false);
+    assert.deepEqual(t.data.rows, [['a', 'b'], ['c', 'd']]);
+    ed.destroy();
+  }
+});
+
+test('BREM: blank-header table with no body rows keeps its header', () => {
+  const ed = createEditor(mount(), { mode: 'BREM' });
+  ed.setJSON({ id: 'x', version: 1, created: 1, updated: 1, blocks: [{ id: 'm', type: 'markdown', data: { markdown: '|  |  |\n| --- | --- |' } }] });
+  assert.match(ed.getHTML(), /<thead>/);
+  ed.destroy();
+});
+
+test('headerless table survives BRE → BREM → BREW', () => {
+  const bre = createEditor(mount(), { mode: 'BRE' });
+  bre.setJSON(headerless());
+  const brem = createEditor(mount(), { mode: 'BREM' });
+  brem.setJSON(bre.getJSON());
+  const brew = createEditor(mount(), { mode: 'BREW' });
+  brew.setJSON(brem.getJSON({ as: 'blocks' }));
+  assert.equal(brew.getJSON().blocks.find((b) => b.type === 'table').data.hasHeader, false);
+  bre.destroy(); brem.destroy(); brew.destroy();
+});

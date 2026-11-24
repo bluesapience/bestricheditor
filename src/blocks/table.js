@@ -1,6 +1,6 @@
 /**
  * Table block plugin.
- * data: { rows: string[][] }
+ * data: { rows: string[][], hasHeader?: boolean }  (hasHeader omitted => true)
  */
 import { blockRegistry } from '../core/blockRegistry.js';
 import { DEFAULT_MESSAGES } from '../core/messages.js';
@@ -14,6 +14,7 @@ blockRegistry.register('table', {
         ? block.data.rows
         : [['Header 1', 'Header 2'], ['', '']];
 
+    const hasHeader = block.data?.hasHeader !== false;
     const wrapper = document.createElement('div');
     wrapper.className = 'bre-table-wrapper';
 
@@ -26,25 +27,26 @@ blockRegistry.register('table', {
     rows.forEach((row, rowIndex) => {
       const tr = document.createElement('tr');
       (Array.isArray(row) ? row : []).forEach((cell, colIndex) => {
-        const tag = rowIndex === 0 ? 'th' : 'td';
+        const isHead = hasHeader && rowIndex === 0;
+        const tag = isHead ? 'th' : 'td';
         const cellEl = document.createElement(tag);
         cellEl.className = 'bre-table-cell';
         cellEl.setAttribute('contenteditable', 'true');
         cellEl.setAttribute('data-bre-table-row', String(rowIndex));
         cellEl.setAttribute('data-bre-table-col', String(colIndex));
-        cellEl.setAttribute('data-bre-placeholder', rowIndex === 0 ? m.tableHeader : m.tableCell);
+        cellEl.setAttribute('data-bre-placeholder', isHead ? m.tableHeader : m.tableCell);
         cellEl.textContent = String(cell);
         tr.appendChild(cellEl);
       });
-      if (rowIndex === 0) {
+      if (hasHeader && rowIndex === 0) {
         thead.appendChild(tr);
       } else {
         tbody.appendChild(tr);
       }
     });
 
-    table.appendChild(thead);
-    if (rows.length > 1) table.appendChild(tbody);
+    if (hasHeader) table.appendChild(thead);
+    if (tbody.childNodes.length) table.appendChild(tbody);
 
     const controls = document.createElement('div');
     controls.className = 'bre-table-controls';
@@ -72,7 +74,8 @@ blockRegistry.register('table', {
   toHTML(block) {
     const rows = block.data && Array.isArray(block.data.rows) ? block.data.rows : [];
     if (rows.length === 0) return '';
-    const [headerRow, ...bodyRows] = rows;
+    const hasHeader = block.data.hasHeader !== false;
+    const [headerRow, ...bodyRows] = hasHeader ? rows : [null, ...rows];
     const thead = headerRow
       ? `<thead><tr>${headerRow.map(c => `<th>${escapeHTML(String(c))}</th>`).join('')}</tr></thead>`
       : '';

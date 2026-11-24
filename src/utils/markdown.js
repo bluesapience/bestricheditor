@@ -457,7 +457,10 @@ function tokenizeMarkdown(text) {
         i++;
       }
       const [headerRow, /* sep */, ...bodyRows] = tableLines;
-      tokens.push({ t: 'table', rows: [parseRow(headerRow), ...bodyRows.map(parseRow)] });
+      const head = parseRow(headerRow);
+      // An all-blank header row (with body rows) marks a headerless table.
+      const headerless = bodyRows.length > 0 && head.every(c => c === '');
+      tokens.push({ t: 'table', headerless, rows: headerless ? bodyRows.map(parseRow) : [head, ...bodyRows.map(parseRow)] });
       continue;
     }
 
@@ -527,8 +530,10 @@ function parseMarkdownInner(text) {
         out.push(`<${tok.t}>\n${tok.items.map(it => `<li>${processInline(it)}</li>`).join('\n')}\n</${tok.t}>`);
         break;
       case 'table': {
-        const [headers, ...body] = tok.rows;
-        const thead = `<thead><tr>${headers.map(h => `<th>${processInline(h)}</th>`).join('')}</tr></thead>`;
+        const [headers, ...body] = tok.headerless ? [null, ...tok.rows] : tok.rows;
+        const thead = headers
+          ? `<thead><tr>${headers.map(h => `<th>${processInline(h)}</th>`).join('')}</tr></thead>`
+          : '';
         const tbody = body.length > 0
           ? `<tbody>${body.map(r => `<tr>${r.map(c => `<td>${processInline(c)}</td>`).join('')}</tr>`).join('\n')}</tbody>`
           : '';
@@ -603,7 +608,7 @@ export function markdownToBlocks(md) {
           while (cells.length < width) cells.push('');
           return cells;
         });
-        blocks.push(block('table', { rows }));
+        blocks.push(block('table', tok.headerless ? { rows, hasHeader: false } : { rows }));
         break;
       }
       default: {

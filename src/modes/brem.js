@@ -5,7 +5,7 @@
  * Note: programmatic setJSON()/setHTML() never fire 'change' — only user edits do.
  */
 import { generateId } from '../utils/id.js';
-import { sanitizeHTML, sanitizeToFragment } from '../utils/sanitize.js';
+import { sanitizeToFragment } from '../utils/sanitize.js';
 import { parseMarkdown, markdownToBlocks } from '../utils/markdown.js';
 import { blocksToMarkdown } from '../utils/blocksToMarkdown.js';
 import { htmlToBlocks } from '../utils/htmlToBlocks.js';
@@ -45,6 +45,10 @@ export function createBremEditor(container, options = {}) {
   let readOnly = !!opts.readOnly;
   let destroyed = false;
   let changeTimer = null;
+  // Sanitized render of the current markdown, shared by preview and getHTML().
+  // Valid only for the exact source and KaTeX-loaded state it was built from.
+  let renderCache = null; // { md, katex, frag }
+  const SANITIZE_OPTS = { allowKaTeX: true, allowMedia: true };
 
   let _docId = generateId();
   let _blockId = generateId();
@@ -107,9 +111,22 @@ export function createBremEditor(container, options = {}) {
     toggleBtn.setAttribute('aria-label', toggleBtn.textContent);
   }
 
+  /** Parse + sanitize once per (markdown, KaTeX state); callers must clone the result. */
+  function sanitizedFragment() {
+    const katex = !!getKaTeX();
+    if (!renderCache || renderCache.md !== markdown || renderCache.katex !== katex) {
+      renderCache = {
+        md: markdown,
+        katex,
+        frag: sanitizeToFragment(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), SANITIZE_OPTS),
+      };
+    }
+    return renderCache.frag;
+  }
+
   function renderPreview() {
     if (!markdown.trim()) { preview.replaceChildren(); return; } // :empty -> placeholder
-    preview.replaceChildren(sanitizeToFragment(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), { allowKaTeX: true, allowMedia: true }));
+    preview.replaceChildren(sanitizedFragment().cloneNode(true));
     // KaTeX loads lazily — re-render once it arrives if the text has math.
     if (!getKaTeX() && markdown.includes('$')) {
       const snapshot = markdown;
@@ -143,8 +160,8 @@ export function createBremEditor(container, options = {}) {
     textarea.value = md;
     clearTimeout(changeTimer); // programmatic loads must not emit a stale change
     changeTimer = null;
-    autoGrow();
-    if (isPreviewing || readOnly) renderPreview();
+    // The textarea is hidden while previewing; showEdit() sizes it on entry.
+    if (isPreviewing || readOnly) renderPreview(); else autoGrow();
   }
 
   // ── Event listeners ───────────────────────────────────────────────────────
@@ -156,6 +173,7 @@ export function createBremEditor(container, options = {}) {
 
   on(textarea, 'input', () => {
     markdown = textarea.value;
+    renderCache = null; // source changed: free the stale render
     autoGrow();
     scheduleChange();
   });
@@ -273,7 +291,11 @@ export function createBremEditor(container, options = {}) {
   }
 
   function getHTML() {
-    return sanitizeHTML(parseMarkdown(markdown, { embedAllowlist: opts.embedAllowlist }), { allowKaTeX: true, allowMedia: true });
+    if (!markdown.trim()) return '';
+    // Serialising already-sanitized DOM (a read, not an innerHTML assignment).
+    const holder = document.createElement('div');
+    holder.appendChild(sanitizedFragment().cloneNode(true));
+    return holder.innerHTML;
   }
 
   function setReadOnly(v) {
@@ -301,6 +323,7 @@ export function createBremEditor(container, options = {}) {
     unsubs.forEach(u => u());
     unsubs.length = 0;
     if (emitter._listeners) emitter._listeners.clear();
+    renderCache = null;
     root.remove();
   }
 

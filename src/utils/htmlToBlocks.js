@@ -208,19 +208,26 @@ function processBlockNode(node, tag, blocks) {
 
     case 'TABLE': {
       const rows = [];
+      let firstRowHasTh = false;
       for (const tr of node.querySelectorAll('tr')) {
         const row = [];
+        let hasTh = false;
         for (const cell of tr.children) {
           const t = cell.tagName.toUpperCase();
+          if (t === 'TH') hasTh = true;
           if (t === 'TH' || t === 'TD') row.push(cell.textContent.trim());
         }
-        if (row.length > 0) rows.push(row);
+        if (row.length > 0) {
+          if (rows.length === 0) firstRowHasTh = hasTh;
+          rows.push(row);
+        }
       }
       if (rows.length > 0) {
         // Normalise ragged rows so the table block is rectangular.
         const width = Math.max(...rows.map(r => r.length));
         for (const r of rows) while (r.length < width) r.push('');
-        blocks.push(makeBlock('table', { rows }));
+        // A table whose first row has no <th> is headerless; omit the flag otherwise (default true).
+        blocks.push(makeBlock('table', firstRowHasTh ? { rows } : { rows, hasHeader: false }));
       }
       break;
     }
